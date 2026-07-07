@@ -1,0 +1,18 @@
+{
+  "keil": {
+    "uv4_path": "C:\\Keil_v5\\UV4\\UV4.exe",
+  },
+  "serial": {
+    "port": "COM19",
+    "baudrate": 256000,
+    "bytesize": 8,
+    "parity": "N",
+    "stopbits": 1,
+    "timeout": 3
+  },
+  "jlink": {
+    "device": "STM32H753ZI",
+    "interface": "SWD",
+    "speed": 4000
+  }
+}

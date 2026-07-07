@@ -1,0 +1,28 @@
+{
+  "$schema": "嵌入式固件调试工作流 Flow Gate v2",
+  "_说明": "此文件由 AI 自动维护。禁止手动编辑。阶段定义见 registry.json。生成到项目 .copilot/ 下。",
+  "currentPhase": null,
+  "completedPhases": [],
+  "currentGateFile": null,
+  "lastUpdated": null,
+  "projectInfo": {
+    "configFound": false,
+    "serialConfirmed": false,
+    "hardwareReady": false,
+    "faultDescribed": false
+  },
+  "debugLoopInfo": {
+    "iterationCount": 0,
+    "cheshiAdded": false,
+    "lastBuildStatus": null,
+    "lastFlashStatus": null,
+    "rootCauseFound": false
+  },
+  "debugSession": {
+    "startTime": null,
+    "endTime": null,
+    "faultSummary": "",
+    "reportFile": "",
+    "memorySaved": false
+  }
+}
