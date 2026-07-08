@@ -30,19 +30,14 @@ steps:
   # ============================================================
   - id: step_verify
     description: "编译下载并验证故障已解决"
-    type: verify_fix
-    sub_steps:
-      - type: compile
-        project: "{project_file}"
-      - type: flash
-        project: "{project_file}"
-      - type: serial_capture
-        port: "{serial_port}"
-        baud: "{serial_baud}"
-        duration: 10
+    type: run_script
+    script: 'python scripts/build_and_flash.py --config-dir "{project_dir}"'
     on_success:
       - type: log_info
         message: "验证通过，故障已解决"
+      - type: run_script
+        script: 'python scripts/serial_monitor.py --duration 10 --save "{project_dir}/MDK-ARM/logs/verify_log.txt"'
+        description: "串口监听验证"
     on_failure:
       - type: goto_step
         step: step_analyze

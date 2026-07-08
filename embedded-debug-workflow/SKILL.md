@@ -21,8 +21,10 @@ argument-hint: '描述故障现象 / 输入 debug help 查看帮助'
 |------|------|:---:|
 | `/kzl 帮助` 或 `/kzl help` | 显示调试工作流帮助和可用命令 | `commands/help.md` |
 | `/kzl 初始化` 或 `/kzl init [项目目录]` | 初始化调试配置（扫描工程→采集参数→生成配置） | `commands/init.md` |
+| `/kzl 编译` 或 `/kzl build` | 编译当前工程并下载固件到设备 | `commands/build.md` |
 
 > 以上命令是辅助入口，仍可通过直接描述故障现象触发完整调试流程。
+> **所有操作（包括 `/kzl` 命令）必须先执行下方的 Flow Gate 门禁预检。**
 > 原始 Flow Gate 门禁机制保持不变，所有流程仍需遵循门禁规则。
 
 ---

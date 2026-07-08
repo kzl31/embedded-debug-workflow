@@ -36,9 +36,8 @@ steps:
   # ============================================================
   - id: step_compile
     description: "编译固件"
-    type: compile
-    project: "{project_file}"
-    uv4_path: "C:\\Keil_v5\\UV4\\UV4.exe"
+    type: run_script
+    script: 'python scripts/keil_build.py --config-dir "{project_dir}"'
     on_success:
       - type: update_state
         fields:
@@ -57,9 +56,8 @@ steps:
   # ============================================================
   - id: step_flash
     description: "下载固件到目标板"
-    type: flash
-    project: "{project_file}"
-    uv4_path: "C:\\Keil_v5\\UV4\\UV4.exe"
+    type: run_script
+    script: 'python scripts/keil_flash.py --config-dir "{project_dir}"'
     retry: 1
     on_success:
       - type: update_state
@@ -79,11 +77,8 @@ steps:
   # ============================================================
   - id: step_capture_log
     description: "启动串口监听，捕获日志"
-    type: serial_capture
-    port: "{serial_port}"
-    baud: "{serial_baud}"
-    duration: 15
-    save_to: "{project_dir}/MDK-ARM/logs/debug_log.txt"
+    type: run_script
+    script: 'python scripts/serial_monitor.py --duration 15 --save "{project_dir}/MDK-ARM/logs/debug_log.txt"'
     note: "先启动监听，再请用户复位目标板，确保捕获到启动阶段日志"
 
   # ============================================================
