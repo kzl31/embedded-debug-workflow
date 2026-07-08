@@ -58,19 +58,41 @@ steps:
     description: "下载固件到目标板"
     type: run_script
     script: 'python scripts/keil_flash.py --config-dir "{project_dir}"'
-    retry: 1
+    note: "执行前检查 flow-gate.json 中 debugLoopInfo.flashRetryCount ≥ 2 则直接结束流程，不执行下载"
+    precheck:
+      - type: assert
+        condition: "flow-gate.json / debugLoopInfo / retryCount < 2"
+        on_fail:
+          - type: log_error
+            message: "retryCount ≥ 2，已达最大重试次数，禁止继续下载"
+          - type: exit_phase
+            next_phase: COMPLETED
+    pre_action:
+      - type: update_state
+        fields:
+          debugLoopInfo.retryCount: "+1"
     on_success:
       - type: update_state
         fields:
           debugLoopInfo.lastFlashStatus: "success"
+          debugLoopInfo.retryCount: 0
     on_failure:
       - type: update_state
         fields:
           debugLoopInfo.lastFlashStatus: "failure"
-    retry_failure:
-      - type: wait_user
-        message: "下载失败，请检查 JLink 连接和目标板供电，确认后重试"
-        retry_step: step_flash
+      - type: assert
+        condition: "flow-gate.json / debugLoopInfo / retryCount >= 2"
+        on_success:
+          - type: log_error
+            message: "连续2次下载失败（retryCount=${retryCount}），结束流程"
+          - type: exit_phase
+            next_phase: COMPLETED
+            update_state:
+              currentPhase: "COMPLETED"
+              completedPhases: ["+DEBUG_LOOP"]
+              currentGateFile: null
+              debugSession.endTime: "{now}"
+              debugSession.faultSummary: "下载失败：连续2次失败（retryCount=${retryCount}）"
 
   # ============================================================
   # Step 5: 读取串口日志
@@ -78,8 +100,40 @@ steps:
   - id: step_capture_log
     description: "启动串口监听，捕获日志"
     type: run_script
-    script: 'python scripts/serial_monitor.py --duration 15 --save "{project_dir}/MDK-ARM/logs/debug_log.txt"'
-    note: "先启动监听，再请用户复位目标板，确保捕获到启动阶段日志"
+    script: 'python scripts/serial_monitor.py --config-dir "{project_dir}" --duration 30 --save "{project_dir}/MDK-ARM(AC5)/logs/debug_log.txt"'
+    note: |
+      先启动监听，再请用户复位目标板，确保捕获到启动阶段日志。
+      串口规则：
+        - 默认 JLink CDC UART 为调试串口（auto_detect_port 优先匹配）
+        - 配置端口不可用时自动扫描可用串口并更新配置
+        - 监听时长 30 秒，足以捕获启动日志 + 1秒周期的 SAFEGUARD 统计
+    precheck:
+      - type: assert
+        condition: "flow-gate.json / debugLoopInfo / retryCount < 2"
+        on_fail:
+          - type: log_error
+            message: "retryCount ≥ 2，已达最大重试次数，结束流程"
+          - type: exit_phase
+            next_phase: COMPLETED
+    pre_action:
+      - type: update_state
+        fields:
+          debugLoopInfo.retryCount: "+1"
+    on_success:
+      - type: update_state
+        fields:
+          debugLoopInfo.retryCount: 0
+    on_failure:
+      - type: update_state
+        fields:
+          debugLoopInfo.lastFlashStatus: "failure"
+      - type: assert
+        condition: "flow-gate.json / debugLoopInfo / retryCount >= 2"
+        on_success:
+          - type: log_error
+            message: "连续2次串口打开失败（retryCount=${retryCount}），结束流程"
+          - type: exit_phase
+            next_phase: COMPLETED
 
   # ============================================================
   # Step 6: 分析结果

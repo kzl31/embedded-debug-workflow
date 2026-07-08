@@ -33,6 +33,8 @@ argument-hint: '描述故障现象 / 输入 debug help 查看帮助'
 
 | 章节 | 说明 | 位置 |
 |------|------|------|
+| 📋 待办事项管理规则 | 按三阶段模板生成 Todo List，严格匹配门禁步骤 | 本文件下方 |
+| 🆕 新任务重置机制 | COMPLETED 后新任务自动重置 flow-gate.json | 本文件下方 |
 | ⛔ Flow Gate 门禁预检 | **优先级最高，每次操作前必执行** | 本文件下方 |
 | 强制规则 | 5 条核心规则 | `refs/core-rules.md` |
 | 启动流程 | STARTUP 门禁（参数采集+初始化） | `gates/STARTUP.yaml` |
@@ -51,6 +53,126 @@ argument-hint: '描述故障现象 / 输入 debug help 查看帮助'
 | JLink 调试 | JLink Commander 命令行调试 | `refs/jlink-debug.md` |
 | Map 文件分析 | 查函数地址、栈深度、内存占用 | `refs/map-analysis.md` |
 | 中断安全打印 | 环形缓冲区 ISR 调试方案 | `refs/isr-debug.md` |
+
+---
+
+## 📋 待办事项管理规则
+
+### 待办事项模板（AI 必须严格按此模板生成）
+
+每次创建待办事项时，必须严格按照以下模板，按顺序生成 `- [ ] 步骤名` 格式的列表。
+**待办项名称必须与当前阶段门禁步骤的 description 保持一致**，不可自行编造。
+
+```
+■ 第一阶段：STARTUP（启动阶段）
+  - [ ] Flow Gate 预检           ← 步骤0-4（读 registry → flow-gate.json）
+  - [ ] 检查配置文件              ← STARTUP Step 1
+  - [ ] 采集参数                  ← STARTUP Step 2（串口/下载器/故障描述）
+  - [ ] 确认硬件                  ← STARTUP Step 2（用户确认就绪）
+  └── 完成后 currentPhase → DEBUG_LOOP
+
+■ 第二阶段：DEBUG_LOOP（调试循环，可多轮迭代，上限8轮）
+  每轮迭代包含以下步骤：
+  - [ ] 分析日志/定位代码          ← DEBUG_LOOP Step 1
+  - [ ] 添加CHESHI调试打印         ← DEBUG_LOOP Step 2（可选）
+  - [ ] 编译                      ← DEBUG_LOOP Step 3（用 keil_build.py）
+  - [ ] 下载固件                  ← DEBUG_LOOP Step 4（用 keil_flash.py）
+  - [ ] 串口监听+复位目标板        ← DEBUG_LOOP Step 5（用 serial_monitor.py）
+  - [ ] 分析日志结果              ← DEBUG_LOOP Step 6
+  └── 根因未找到 → 返回"分析日志/定位代码"开始下一轮
+  └── 根因已找到 → currentPhase → VERIFY_AND_REPORT
+
+■ 第三阶段：VERIFY_AND_REPORT（验证与报告）
+  - [ ] 清理CHESHI宏              ← VERIFY Step 1
+  - [ ] 修改业务代码修复           ← VERIFY Step 2
+  - [ ] 下载验证                  ← VERIFY Step 3（build_and_flash.py + serial_monitor）
+  - [ ] 回归验证                  ← VERIFY Step 4
+  - [ ] 生成报告                  ← VERIFY Step 5
+  └── 完成后 currentPhase → COMPLETED
+```
+
+### 执行规则
+
+```
+1. 创建时只列出**当前阶段及之后的待办项**
+   例：在 STARTUP 阶段 → 列出 STARTUP + DEBUG_LOOP + VERIFY 的全部项
+
+2. 每完成一项，立即用 manage_todo_list 标记为 [x]
+   每开始一项，立即标记为 in-progress
+   ⛔ 严禁一次性标记多个项为 completed
+
+3. 待办项名称必须从模板中选用，如需新增必须与当前门禁步骤 description 一致
+   例：在 Step 2 可能需要 "采集参数" 和 "确认硬件" 两个待办
+   ✅ "[ ] 采集参数"    ← 正确，来自模板
+   ❌ "[ ] 查看串口"    ← 错误，无此模板项
+   ❌ "[ ] 分析代码"    ← 错误，模板中是"分析日志/定位代码"
+
+4. 每轮 DEBUG_LOOP 迭代完成后，如果根因未找到：
+   - flow-gate.json 中 iterationCount +1
+   - 待办列表新增一轮 DEBUG_LOOP 项（从"分析日志/定位代码"重新开始）
+   - 最多 8 轮，超限则等待用户指示
+
+5. ⛔ 完整闭环铁律：
+   每次 DEBUG_LOOP 迭代必须完整执行，不可中途停止：
+   编译 → 下载 → 串口监听+复位 → 分析日志
+   ├─ 缺少任何一环 = 流程违规
+   ├─ 即使编译成功也不能跳过下载和串口验证
+   └─ 即使"看起来修复了"也必须走完串口验证再进入下一轮
+
+5. **⛔ 强制自动延续规则（阶段转换时不得中断）**
+   ```
+   根因找到（rootCauseFound=true）后，AI 必须立即自动执行以下操作，
+   不得停顿、不得向用户展示阶段性成果、不得等待用户确认：
+   
+   ├─ 1. 更新 flow-gate.json → currentPhase=VERIFY_AND_REPORT
+   ├─ 2. 读取 gates/VERIFY_AND_REPORT.yaml
+   ├─ 3. 立即执行 VERIFY Step 1（清理CHESHI）  ← 不中断
+   ├─ 4. 按顺序执行 VERIFY Step 2~5 直至 COMPLETED
+   └─ 唯一的合法暂停：终端命令（编译/下载/串口）等待输出时
+   
+   同理，从 STARTUP 进入 DEBUG_LOOP 时也必须自动延续。
+   ```
+```
+
+---
+
+## 🆕 新任务重置机制
+
+### 什么时候需要重置
+
+当以下条件**同时满足**时，表示这是一个**新调试任务**，需要重置 flow-gate.json：
+
+1. `flow-gate.json` 中的 `currentPhase` 为 `COMPLETED`
+2. 用户描述的故障现象**不同于** `debugSession.faultSummary` 中记录的内容
+
+### 重置规则
+
+```
+满足重置条件 → AI 自动执行以下操作：
+
+1. 读取当前 flow-gate.json，保留项目路径等基本信息
+2. 将以下字段重置为 STARTUP 初始状态：
+   ├─ currentPhase: "STARTUP"
+   ├─ completedPhases: []
+   ├─ currentGateFile: "gates/STARTUP.yaml"
+   ├─ debugLoopInfo.iterationCount: 0
+   ├─ debugLoopInfo.cheshiAdded: false
+   ├─ debugLoopInfo.lastBuildStatus: null
+   ├─ debugLoopInfo.lastFlashStatus: null
+   ├─ debugLoopInfo.rootCauseFound: false
+   ├─ debugSession.startTime: 当前时间
+   ├─ debugSession.endTime: null
+   ├─ debugSession.faultSummary: 用户描述的新故障
+   ├─ debugSession.reportFile: ""
+   └─ debugSession.memorySaved: false
+3. 写入 .copilot/flow-gate.json
+4. 按"待办事项模板"创建待办列表（从 STARTUP 阶段开始全部列出）
+5. 第一条"Flow Gate 预检"标记为 in-progress → 开始执行
+```
+
+### 不重置的情况
+
+如果 `currentPhase = COMPLETED` 但用户描述的是**同一故障的延续**（相同的 faultSummary），则无需重置，直接进入 DEBUG_LOOP 继续迭代。
 
 ---
 
@@ -76,9 +198,21 @@ argument-hint: '描述故障现象 / 输入 debug help 查看帮助'
   ├─ null / 未找到 → 只能读 gates/STARTUP.yaml
   └─ "COMPLETED"   → 允许任意门禁（继续或新任务）
 
-步骤 4: 严格按照门禁文件中的 Step 1..N 顺序执行
-  严禁跳过中间步骤
-  每完成一步，更新 .copilot/flow-gate.json 对应字段
+步骤 4: 先更新状态，再执行操作（无条件执行，无论用户打开什么文件）
+  ├─ 每次执行任何操作前 → 先更新 flow-gate.json
+  │  中的 currentPhase 和当前步骤状态
+  ├─ 每次操作完成后 → 再次更新 flow-gate.json 记录结果
+  ├─ 必须严格按照门禁文件中的 Step 1..N 顺序执行完整闭环
+  │  编译 → 下载 → 串口监听 → 分析 → 下一轮迭代
+  │  ⛔ 禁止在任意一环停下
+  ├─ 严禁跳过中间步骤
+  └─ 每完成一步，立即更新 .copilot/flow-gate.json 对应字段
+
+  ⛔ 特别禁止：
+    ├─ 禁止直接调用 UV4.exe / keil_flash.py 下载固件
+    ├─ 必须经过 step_flash 门禁（含 flashRetryCount 强制检查）
+    └─ 每次下载前必须读 flow-gate.json 检查 flashRetryCount
+       └─ flashRetryCount ≥ 2 → 禁止下载，直接结束流程
 ```
 
 ### ⛔ 禁止规则（定义于 registry.json）

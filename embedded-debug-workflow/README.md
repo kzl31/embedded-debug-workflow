@@ -32,7 +32,12 @@ embedded-debug-workflow/
 │   ├── STARTUP.yaml       #   启动阶段（参数采集+初始化）
 │   ├── DEBUG_LOOP.yaml    #   调试循环（8轮迭代）
 │   └── VERIFY_AND_REPORT.yaml # 验证与报告阶段（末步自动生成报告+写记忆）
+├── commands/              # /kzl 快捷命令入口
+│   ├── help.md            #   /kzl 帮助
+│   ├── init.md            #   /kzl 初始化
+│   └── build.md           #   /kzl 编译
 ├── scripts/               # Python + PowerShell 自动化脚本
+│   ├── skill-config.json  #   脚本默认配置（Keil路径/串口/JLink参数）
 │   ├── config_reader.py   #   配置文件读写 (Python)
 │   ├── config_reader.ps1  #   配置文件读写 (PowerShell 备用)
 │   ├── keil_build.py      #   Keil 编译 (Python)
@@ -55,14 +60,16 @@ embedded-debug-workflow/
 │   ├── git-rules.md       #   Git 本地版本管理
 │   ├── cheshi-macro.md    #   CHESHI 宏规范
 │   ├── pause-scenarios.md #   人工暂停规范
-│   └── common-faults.md   #   常见故障速查 & Map 分析
+│   ├── common-faults.md   #   常见故障速查 & Map 分析
+│   ├── jlink-debug.md     #   JLink Commander 调试
+│   ├── map-analysis.md    #   Map 文件分析
+│   └── isr-debug.md       #   中断安全打印
 ├── templates/             # 模板文件
 │   ├── flow-gate.json     #   flow-gate.json 模板（生成到项目 .copilot/ 下）
-│   ├── config.json        #   配置文件模板
 │   ├── report.md          #   故障报告模板
 │   └── cheshi_snippet.c   #   CHESHI 宏代码模板
-└── data/                 # 运行时配置（自动生成）
-    └── config.json        #   全局持久化配置
+└── data/                 # 运行时数据（自动生成）
+    └── debug-history.yaml #   调试历史索引
 ```
 
 ## 🔧 环境要求

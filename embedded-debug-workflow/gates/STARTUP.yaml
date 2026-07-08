@@ -30,38 +30,29 @@ steps:
   # Step 2: 一次性采集全部参数
   # ============================================================
   - id: step_collect_params
-    description: "一次性采集全部参数：串口变化、下载器就绪、故障描述"
+    description: "采集参数：串口变化、故障描述"
     type: ask_user
+    note: "JLink 默认已连接，目标板默认已上电，无需用户确认。下载失败会自动重试1次。"
     template: |
       当前项目配置：
         📍 串口: COM{port} @ {baud}
         🔧 调试器: {type} (SN: {sn})
         📌 设备: {role} | {comm_link}
 
-      请确认以下问题（一次性回答）：
+      请确认以下问题：
         1️⃣ 串口号/波特率是否有变化？        【无变化 / 输入新端口号如 COM5】
-        2️⃣ 当前调试器有几个，如果有多个请说出对应的串口号？     【1个】
-        3️⃣ 下载器已连接且目标板已上电？      【是 / 否】
-        4️⃣ 当前故障现象描述？               【描述故障 / 无】
+        2️⃣ 当前故障现象描述？               【描述故障 / 无】
     branches:
       serial_changed:
         - type: run_script
           script: 'python scripts/config_reader.py --set-port "{new_port}" --path "{project_dir}"'
-      hardware_not_ready:
-        - type: wait_user
-          message: "请连接下载器并给目标板上电，然后告诉我已就绪"
-          retry_step: step_collect_params
-      hardware_ready:
-        - type: update_state
-          fields:
-            projectInfo.hardwareReady: true
       fault_described:
         - type: update_state
           fields:
             projectInfo.faultDescribed: true
       all_confirmed:
         - type: log_info
-          message: "全部参数已确认"
+          message: "参数已确认，JLink 默认已连接，继续执行"
 
   # ============================================================
   # Step 3: 标记完成

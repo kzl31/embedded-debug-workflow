@@ -26,7 +26,7 @@ from threading import Event
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPT_DIR))
-from config_reader import load_config, get_serial_config
+from config_reader import load_config, get_serial_config, save_config
 
 # 错误/警告模式（用于日志分析）
 ERROR_PATTERNS = [
@@ -46,6 +46,59 @@ STARTUP_PATTERNS = [
         r"firmware version", r"build:", r"starting",
     ]
 ]
+
+
+def fix_port_name(port: str) -> str:
+    """Windows 下补全 COM 前缀：'19' → 'COM19'"""
+    if sys.platform == "win32" and port.isdigit():
+        return f"COM{port}"
+    return port
+
+
+def auto_detect_port(preferred_hint: str | None = None) -> str | None:
+    """自动扫描可用串口，按优先级：配置端口 > USB-SERIAL > 其他 > JLink > COM1。
+
+    JLink CDC 是下载接口，非调试串口，优先级最低。
+
+    Returns:
+        找到的端口名（如 'COM8'），找不到返回 None
+    """
+    try:
+        import serial.tools.list_ports as lp
+    except ImportError:
+        return None
+
+    ports = list(lp.comports())
+    if not ports:
+        return None
+
+    # 1. 优先匹配用户配置的端口
+    if preferred_hint:
+        fixed = fix_port_name(preferred_hint)
+        for p in ports:
+            if p.device.upper() == fixed.upper():
+                return p.device
+
+    # 2. USB-SERIAL / CH343（调试串口）
+    for p in ports:
+        desc = p.description.lower()
+        if "usb" in desc and ("serial" in desc or "ch340" in desc or "ch343" in desc):
+            return p.device
+
+    # 3. 其他非 COM1 非 JLink 端口
+    for p in ports:
+        dev_upper = p.device.upper()
+        desc_lower = p.description.lower()
+        if dev_upper != "COM1" and "jlink" not in desc_lower:
+            return p.device
+
+    # 4. JLink CDC（下载接口，调试时备选）
+    for p in ports:
+        if "jlink" in p.description.lower():
+            return p.device
+
+    # 5. 返回第一个（含 COM1）
+    return ports[0].device
 
 
 def monitor_serial(
@@ -197,7 +250,7 @@ def main() -> None:
     config = load_config(args.config_dir)
     serial_cfg = get_serial_config(config)
 
-    port = args.port or serial_cfg["port"]
+    port = fix_port_name(args.port or serial_cfg["port"])
     baud = args.baud or serial_cfg["baud"]
 
     result = monitor_serial(
@@ -207,6 +260,26 @@ def main() -> None:
         save_path=args.save, wait_for=args.wait,
         continuous=args.continuous,
     )
+
+    if result["status"] == "error":
+        # 配置端口失败 → 自动扫描可用串口
+        detected = auto_detect_port(port)
+        if detected and detected != port:
+            print(f"[serial_monitor] 🔄 配置端口 {port} 不可用，自动切换到 {detected}")
+            # 更新配置文件端口（去掉 COM 前缀以兼容 config_reader 存储格式）
+            if args.config_dir:
+                cfg_port = detected.replace("COM", "")
+                config["serial"]["port"] = cfg_port
+                save_config(config, args.config_dir)
+                print(f"[serial_monitor] 💾 已更新配置文件端口为 {detected}")
+
+            result = monitor_serial(
+                port=detected, baud=baud,
+                data_bits=args.data_bits, stop_bits=args.stop_bits, parity=args.parity,
+                duration=None if args.continuous else args.duration,
+                save_path=args.save, wait_for=args.wait,
+                continuous=args.continuous,
+            )
 
     if result["status"] == "error":
         print(f"❌ {result['error']}")
