@@ -231,7 +231,27 @@ def monitor_serial(
     return result
 
 
+def _select_project_index(config: dict, project_dir: str | None) -> int:
+    """根据工程目录匹配工程下标；未指定或匹配失败返回 0。"""
+    if not project_dir:
+        return 0
+    projects = config.get("projects", [])
+    target = project_dir.rstrip("/\\").lower()
+    for i, p in enumerate(projects):
+        d = str(p.get("dir", "")).rstrip("/\\").lower()
+        if d and (target == d or target.endswith(d) or d.endswith(target)):
+            return i
+    return 0
+
+
 def main() -> None:
+    # 修复 Windows 控制台 GBK 编码导致的 emoji/中文输出崩溃
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
     parser = argparse.ArgumentParser(description="串口持续监听工具")
     parser.add_argument("--port", help="串口号")
     parser.add_argument("--baud", type=int, help="波特率")
@@ -245,10 +265,12 @@ def main() -> None:
     parser.add_argument("--save", help="日志保存路径")
     parser.add_argument("--wait", help="等待关键字后停止")
     parser.add_argument("--config-dir", help="配置文件所在目录（默认自动查找）")
+    parser.add_argument("--project-dir", help="指定工程目录，用于匹配对应工程的串口参数")
     args = parser.parse_args()
 
     config = load_config(args.config_dir)
-    serial_cfg = get_serial_config(config)
+    project_index = _select_project_index(config, args.project_dir)
+    serial_cfg = get_serial_config(config, project_index)
 
     port = fix_port_name(args.port or serial_cfg["port"])
     baud = args.baud or serial_cfg["baud"]
@@ -269,7 +291,8 @@ def main() -> None:
             # 更新配置文件端口（去掉 COM 前缀以兼容 config_reader 存储格式）
             if args.config_dir:
                 cfg_port = detected.replace("COM", "")
-                config["serial"]["port"] = cfg_port
+                proj = config.setdefault("projects", [{}])[project_index]
+                proj.setdefault("serial", {})["port"] = cfg_port
                 save_config(config, args.config_dir)
                 print(f"[serial_monitor] 💾 已更新配置文件端口为 {detected}")
 

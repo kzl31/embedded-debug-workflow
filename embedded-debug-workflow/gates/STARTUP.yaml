@@ -10,7 +10,7 @@ steps:
     description: "检查项目目录下是否存在 embedded-debug-config.json"
     type: check_file
     target: embedded-debug-config.json
-    search_paths: ["{project_dir}", "{project_dir}/MDK-ARM"]
+    search_paths: ["{project_dir}", "{project_dir}/.copilot"]
     found:
       - type: read_config
       - type: update_state
@@ -27,32 +27,34 @@ steps:
           projectInfo.serialConfirmed: true
 
   # ============================================================
-  # Step 2: 一次性采集全部参数
+  # Step 2: 采集硬件数量与绑定关系
   # ============================================================
   - id: step_collect_params
-    description: "采集参数：串口变化、故障描述"
+    description: "采集参数：故障现象 + 工程配置确认"
     type: ask_user
-    note: "JLink 默认已连接，目标板默认已上电，无需用户确认。下载失败会自动重试1次。"
+    note: "工程配置由用户直接在 embedded-debug-config.json 中修改，无需逐项询问；本步仅确认故障现象与配置是否就绪。"
     template: |
-      当前项目配置：
-        📍 串口: COM{port} @ {baud}
-        🔧 调试器: {type} (SN: {sn})
-        📌 设备: {role} | {comm_link}
+      请回答以下问题：
 
-      请确认以下问题：
-        1️⃣ 串口号/波特率是否有变化？        【无变化 / 输入新端口号如 COM5】
-        2️⃣ 当前故障现象描述？               【描述故障 / 无】
+        ① 当前出现了什么故障？
+          【请描述故障现象，例如：RU3 与 RU2 串口通信丢包 / 某状态机卡死 / 数据解析错误 …】
+
+        ② 工程配置是否已完？
+          【已完成 / 未完成】
+          若未完成，请直接在配置文件 embedded-debug-config.json 中补全串口、下载器、工程目录等，
+          保存后回到此处点「确认」继续；配置无需在此逐项询问。
     branches:
-      serial_changed:
-        - type: run_script
-          script: 'python scripts/config_reader.py --set-port "{new_port}" --path "{project_dir}"'
       fault_described:
         - type: update_state
           fields:
             projectInfo.faultDescribed: true
+      config_confirmed:
+        - type: update_state
+          fields:
+            projectInfo.configConfirmed: true
       all_confirmed:
         - type: log_info
-          message: "参数已确认，JLink 默认已连接，继续执行"
+          message: "参数已确认，进入调试流程"
 
   # ============================================================
   # Step 3: 标记完成
@@ -69,3 +71,5 @@ steps:
         serialConfirmed: true
         hardwareReady: true
         faultDescribed: true
+        configConfirmed: true
+

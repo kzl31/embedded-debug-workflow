@@ -11,6 +11,7 @@
 | `/kzl 帮助` | 显示本帮助 |
 | `/kzl 初始化 [项目目录]` | 初始化调试配置（扫描 Keil 工程、采集串口/下载器参数） |
 | `/kzl 编译` | 编译当前工程并下载固件到设备 |
+| `/kzl 增加流程` | 新增步骤 / 阶段（读 `refs/add-flow-guide.md`） |
 
 ---
 
@@ -20,12 +21,14 @@
 
 ```text
 1. /kzl 初始化 ./        ← 在当前项目初始化配置
-2. 描述故障现象           ← 自动进入调试流程
+2. 描述故障现象并确认工程配置  ← 自动进入调试流程
 ```
 
 ### 后续调试
 
-直接描述故障现象即可，AI 会自动走完 STARTUP → DEBUG_LOOP → VERIFY_AND_REPORT 流程。
+描述故障现象并确认工程配置（若配置未完，直接在 embedded-debug-config.json 中修改后点确认），AI 会自动走完 STARTUP → DEBUG_LOOP → VERIFY_AND_REPORT 流程。
+
+
 
 ---
 
@@ -33,11 +36,12 @@
 
 ```mermaid
 flowchart LR
-    A[描述故障] --> B[STARTUP 启动预检]
+    A[采集硬件信息] --> B[STARTUP 启动预检]
     B --> C[DEBUG_LOOP 调试循环]
     C -->|找到根因| D[VERIFY_AND_REPORT]
     D --> E[✅ 完成]
     C -->|超过8轮| D
+
 ```
 
 ---

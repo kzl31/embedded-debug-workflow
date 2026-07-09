@@ -1,0 +1,37 @@
+{
+  "$schema": "嵌入式固件调试工作流 Flow Gate v2",
+  "_说明": "此文件由 workflow_engine.py 自动维护。禁止手动编辑。阶段定义见 registry.json。",
+  "currentPhase": "VERIFY_AND_REPORT",
+  "completedPhases": [
+    "STARTUP",
+    "DEBUG_LOOP"
+  ],
+  "currentGateFile": "gates/VERIFY_AND_REPORT.yaml",
+  "currentStepIndex": 1,
+  "currentStepId": "step_fix_code",
+  "lastUpdated": "2026-07-08 18:01:09",
+  "projectInfo": {
+    "configFound": true,
+    "serialConfirmed": true,
+    "hardwareReady": true,
+    "faultDescribed": true
+  },
+  "debugLoopInfo": {
+    "iterationCount": 0,
+    "cheshiAdded": false,
+    "lastBuildStatus": "failure",
+    "lastFlashStatus": null,
+    "rootCauseFound": false,
+    "retryCount": 0
+  },
+  "verifyReport": {
+    "cheshiCleaned": false
+  },
+  "debugSession": {
+    "startTime": "2026-07-08 17:52:54",
+    "endTime": null,
+    "faultSummary": "",
+    "reportFile": "",
+    "memorySaved": false
+  }
+}

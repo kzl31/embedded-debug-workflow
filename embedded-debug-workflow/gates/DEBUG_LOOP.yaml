@@ -58,10 +58,10 @@ steps:
     description: "下载固件到目标板"
     type: run_script
     script: 'python scripts/keil_flash.py --config-dir "{project_dir}"'
-    note: "执行前检查 flow-gate.json 中 debugLoopInfo.flashRetryCount ≥ 2 则直接结束流程，不执行下载"
+    note: "执行前检查状态中 debugLoopInfo.retryCount ≥ 2 则直接结束流程，不执行下载"
     precheck:
       - type: assert
-        condition: "flow-gate.json / debugLoopInfo / retryCount < 2"
+        condition: "debugLoopInfo / retryCount < 2"
         on_fail:
           - type: log_error
             message: "retryCount ≥ 2，已达最大重试次数，禁止继续下载"
@@ -81,10 +81,10 @@ steps:
         fields:
           debugLoopInfo.lastFlashStatus: "failure"
       - type: assert
-        condition: "flow-gate.json / debugLoopInfo / retryCount >= 2"
+        condition: "debugLoopInfo / retryCount >= 2"
         on_success:
           - type: log_error
-            message: "连续2次下载失败（retryCount=${retryCount}），结束流程"
+            message: "连续2次下载失败（retryCount=2），结束流程"
           - type: exit_phase
             next_phase: COMPLETED
             update_state:
@@ -92,7 +92,10 @@ steps:
               completedPhases: ["+DEBUG_LOOP"]
               currentGateFile: null
               debugSession.endTime: "{now}"
-              debugSession.faultSummary: "下载失败：连续2次失败（retryCount=${retryCount}）"
+              debugSession.faultSummary: "下载失败：连续2次失败"
+      - type: goto_step
+        step: step_flash
+        note: "retryCount < 2，自动重试下载"
 
   # ============================================================
   # Step 5: 读取串口日志
@@ -100,7 +103,7 @@ steps:
   - id: step_capture_log
     description: "启动串口监听，捕获日志"
     type: run_script
-    script: 'python scripts/serial_monitor.py --config-dir "{project_dir}" --duration 30 --save "{project_dir}/MDK-ARM(AC5)/logs/debug_log.txt"'
+    script: 'python scripts/serial_monitor.py --config-dir "{project_dir}" --project-dir "{project_dir}" --duration 30 --save "{project_dir}/MDK-ARM(AC5)/logs/debug_log.txt"'
     note: |
       先启动监听，再请用户复位目标板，确保捕获到启动阶段日志。
       串口规则：
@@ -109,7 +112,7 @@ steps:
         - 监听时长 30 秒，足以捕获启动日志 + 1秒周期的 SAFEGUARD 统计
     precheck:
       - type: assert
-        condition: "flow-gate.json / debugLoopInfo / retryCount < 2"
+        condition: "debugLoopInfo / retryCount < 2"
         on_fail:
           - type: log_error
             message: "retryCount ≥ 2，已达最大重试次数，结束流程"
@@ -128,12 +131,15 @@ steps:
         fields:
           debugLoopInfo.lastFlashStatus: "failure"
       - type: assert
-        condition: "flow-gate.json / debugLoopInfo / retryCount >= 2"
+        condition: "debugLoopInfo / retryCount >= 2"
         on_success:
           - type: log_error
-            message: "连续2次串口打开失败（retryCount=${retryCount}），结束流程"
+            message: "连续2次串口打开失败（retryCount=2），结束流程"
           - type: exit_phase
             next_phase: COMPLETED
+      - type: goto_step
+        step: step_capture_log
+        note: "retryCount < 2，自动重试串口监听"
 
   # ============================================================
   # Step 6: 分析结果

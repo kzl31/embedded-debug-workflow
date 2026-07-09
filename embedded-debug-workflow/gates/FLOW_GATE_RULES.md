@@ -8,7 +8,7 @@
 
 ```
 registry.json  是唯一阶段来源（可扩展）
-.copilot/flow-gate.json      是唯一进度来源
+引擎内部状态文件         是唯一进度来源（由引擎自管，AI 不读取）
 gates/ 中的文件     是唯一操作入口
 未读到对应门禁文件  = 禁止执行对应操作
 ```
@@ -19,8 +19,8 @@ gates/ 中的文件     是唯一操作入口
 
 ```
 步骤 1: 读取 registry.json，获取所有阶段定义
-步骤 2: 读取项目工作区 .copilot/ 下的 flow-gate.json
-步骤 3: 检查 flow-gate.json.currentPhase
+步骤 2: 运行引擎读取当前状态（引擎内部读取，AI 不直接读文件）
+步骤 3: 检查引擎输出中的 currentPhase
 步骤 4: 在 registry 中查找 currentPhase 对应的 gateFile
   ├─ 找到 → 读取 gates/ 下对应的门禁文件
   ├─ 找不到 / currentPhase == null → 读取 gates/STARTUP.md
@@ -32,7 +32,7 @@ gates/ 中的文件     是唯一操作入口
 ```
 每个门禁文件内部有 Step 1..N
 必须按顺序执行，严禁跳过中间步骤
-完成一步后必须更新 .copilot/flow-gate.json
+完成一步后引擎自动更新内部状态
 ```
 
 ## 规则 3：门禁文件绑定
@@ -47,7 +47,7 @@ gates/ 中的文件     是唯一操作入口
 
 ```
 用户说"有故障" 或 "报错了" 或 粘贴错误日志
-→ 仍然从 .copilot/flow-gate.json.currentPhase 开始
+→ 仍然从引擎输出的 currentPhase 开始
 → 如果 currentPhase == "STARTUP"，必须先完成启动流程
 → 分析代码/查提交 属于 DEBUG_LOOP 阶段的操作
 ```
@@ -78,5 +78,5 @@ gates/ 目录必须包含所有 registry.json 中注册的 gateFile：
 ```
 2026-07-06: 两次跳过 STARTUP 流程直接分析代码
 原因：用户描述故障时，被具体问题吸引，未执行预检
-根治：Flow Gate 机制 —— 操作前必须先读 registry.json + .copilot/flow-gate.json
+根治：Flow Gate 机制 —— 操作前必须先跑引擎（引擎读取 registry.json + 内部状态）
 ```
