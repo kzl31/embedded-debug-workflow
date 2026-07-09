@@ -19,10 +19,10 @@ steps:
       format: "<文件:行号> — <怀疑原因>"
 
   # ============================================================
-  # Step 2: 添加 CHESHI 调试打印
+  # Step 2: 修改或者添加 CHESHI 调试打印
   # ============================================================
   - id: step_add_cheshi
-    description: "在可疑代码位置插入 CHESHI 调试打印"
+    description: "修改问题代码或者在可疑代码位置插入 CHESHI 调试打印"
     type: edit_source
     action: insert_cheshi
     macro_ref: "refs/cheshi-macro.md"
@@ -38,6 +38,12 @@ steps:
     description: "编译固件"
     type: run_script
     script: 'python scripts/keil_build.py --config-dir "{project_dir}"'
+    precheck:
+      - type: assert
+        condition: "projectInfo / buildMode != \"none\""
+        on_fail:
+          - type: goto_step
+            step: step_flash
     on_success:
       - type: update_state
         fields:
@@ -67,6 +73,11 @@ steps:
             message: "retryCount ≥ 2，已达最大重试次数，禁止继续下载"
           - type: exit_phase
             next_phase: COMPLETED
+      - type: assert
+        condition: "projectInfo / buildMode == \"full\""
+        on_fail:
+          - type: goto_step
+            step: step_capture_log
     pre_action:
       - type: update_state
         fields:
@@ -103,7 +114,7 @@ steps:
   - id: step_capture_log
     description: "启动串口监听，捕获日志"
     type: run_script
-    script: 'python scripts/serial_monitor.py --config-dir "{project_dir}" --project-dir "{project_dir}" --duration 30 --save "{project_dir}/MDK-ARM(AC5)/logs/debug_log.txt"'
+    script: 'python scripts/serial_monitor.py --config-dir "{project_dir}" --project-dir "{project_dir}" --duration 30 --save "{project_dir}/.copilot/logs/debug_log.txt"'
     note: |
       先启动监听，再请用户复位目标板，确保捕获到启动阶段日志。
       串口规则：

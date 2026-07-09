@@ -31,10 +31,8 @@ workflow_engine.py — 嵌入式调试工作流状态机引擎
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
-import secrets
 import subprocess
 import sys
 from datetime import datetime
@@ -63,9 +61,8 @@ GATES_DIR = SKILL_DIR / "gates"
 SCRIPTS_DIR = SKILL_DIR / "scripts"
 FLOW_GATE_FILENAME = "flow-gate.json"
 
-# 状态目录映射索引（引擎私有，不写入项目目录）
-# 项目 -> 随机隐藏目录名 的映射只保存在这里，AI 无法从项目结构推断状态文件位置
-GATE_INDEX_DIR = SKILL_DIR / "scripts" / ".gate_index"
+# 状态目录（固定）：<project_dir>/.copilot/.54188/flow-gate.json
+STATE_DIR = ".copilot/.54188"
 
 # 步骤类型 → 执行模式映射
 AUTO_EXEC_TYPES = {"run_script", "check_file", "read_config", "update_state",
@@ -114,41 +111,12 @@ def now_iso() -> str:
 # 状态管理
 # ══════════════════════════════════════════════════════════════════════
 
-def _project_key(project_dir: str) -> str:
-    """项目绝对路径 -> 固定哈希键（用于索引文件名）"""
-    return hashlib.sha1(os.path.abspath(project_dir).encode("utf-8")).hexdigest()[:16]
-
-
-def _resolve_gate_dir(project_dir: str) -> str:
-    """返回（并持久化）本项目状态目录的随机隐藏名，如 '.a1b2c3...'。
-
-    映射关系只保存在引擎私有目录 scripts/.gate_index/ 下，不写入项目目录，
-    AI 无法从项目结构推断状态文件位置（即"隐藏状态文件"需求）。
-    """
-    GATE_INDEX_DIR.mkdir(parents=True, exist_ok=True)
-    key = _project_key(project_dir)
-    index_path = GATE_INDEX_DIR / f"{key}.json"
-    if index_path.exists():
-        try:
-            data = json.loads(index_path.read_text(encoding="utf-8"))
-            d = data.get("dir")
-            if d:
-                return d
-        except Exception:
-            pass
-    # 生成新的随机隐藏目录名（24 位十六进制，AI 不可猜测）
-    rand = "." + secrets.token_hex(12)
-    index_path.write_text(json.dumps({"dir": rand}, ensure_ascii=False), encoding="utf-8")
-    return rand
-
-
 def get_flow_gate_path(project_dir: str) -> Path:
-    """状态文件路径：<project_dir>/<随机隐藏目录>/flow-gate.json
+    """状态文件路径：<project_dir>/.copilot/.54188/flow-gate.json
 
-    随机目录名由引擎在首次运行时生成并持久化到私有索引，AI 不知道具体名字。
+    固定目录名，状态文件统一存放于 .copilot/.54188 下，便于定位。
     """
-    gate_dir = _resolve_gate_dir(project_dir)
-    return Path(project_dir) / gate_dir / FLOW_GATE_FILENAME
+    return Path(project_dir) / STATE_DIR / FLOW_GATE_FILENAME
 
 
 def load_flow_gate(project_dir: str) -> dict:
@@ -208,7 +176,8 @@ def _default_flow_gate() -> dict:
             "configFound": False,
             "serialConfirmed": False,
             "hardwareReady": False,
-            "faultDescribed": False
+            "faultDescribed": False,
+            "buildMode": "full"
         },
         "debugLoopInfo": {
             "iterationCount": 0,
@@ -357,6 +326,17 @@ class WorkflowEngine:
         return self._result("reset", "已重置为新任务", phase="STARTUP",
                             next_action=f"python workflow_engine.py --project \"{self.project_dir}\"")
 
+    def set_state(self, pairs: list) -> dict:
+        """通过 --set KEY=VALUE 写入状态字段（点号语法，如 projectInfo.buildMode=full）"""
+        applied = {}
+        for item in pairs:
+            if "=" not in item:
+                continue
+            key, value = item.split("=", 1)
+            self._apply_update_state({key: value})
+            applied[key] = value
+        return self._result("state_set", f"已更新状态: {applied}", applied=applied)
+
     def jump(self, target_phase: str) -> dict:
         """强制跳转到指定阶段"""
         phases = self.registry.get("phases", {})
@@ -377,6 +357,7 @@ class WorkflowEngine:
         """
         显式初始化 — AI 在每次新对话开始时必须显式调用。
         区别于 reset（重置已有任务），init 是全新开始。
+        初始化同时生成/确认调试配置文件 embedded-debug-config.json。
         """
         data = _default_flow_gate()
         data["currentPhase"] = "STARTUP"
@@ -384,12 +365,42 @@ class WorkflowEngine:
         data["lastUpdated"] = now_iso()
         data["debugSession"]["startTime"] = now_iso()
         save_flow_gate(self.project_dir, data, force=True)
+
+        # 初始化时同步生成调试配置文件（已存在则跳过，保持幂等）
+        try:
+            # 确保子模块（config_reader）输出 emoji 时不因 GBK 控制台崩溃
+            try:
+                sys.stdout.reconfigure(encoding="utf-8")
+                sys.stderr.reconfigure(encoding="utf-8")
+            except Exception:
+                pass
+            from config_reader import init_project, find_config_in_project
+            cfg = find_config_in_project(self.project_dir)
+            if cfg:
+                print(f"[init] ℹ️ 配置文件已存在，跳过生成: {cfg}")
+            else:
+                print("[init] 🔧 未检测到配置文件，开始初始化配置（交互式采集）...")
+                init_project(self.project_dir)
+        except Exception as exc:
+            print(f"[init] ⚠️ 配置文件初始化失败: {exc}", file=sys.stderr)
+
         self.__init__(self.project_dir)
         return self._result("initialized",
             f"✅ 调试工作流已初始化（项目: {self.project_dir}）",
             phase="STARTUP",
             step_index=0,
             next_action=f"python workflow_engine.py --project \"{self.project_dir}\"")
+
+    def set_state(self, pairs: list) -> dict:
+        """通过 --set KEY=VALUE 写入状态字段（点号语法，如 projectInfo.buildMode=full）"""
+        applied = {}
+        for item in pairs:
+            if "=" not in item:
+                continue
+            key, value = item.split("=", 1)
+            self._apply_update_state({key: value})
+            applied[key] = value
+        return self._result("state_set", f"已更新状态: {applied}", applied=applied)
 
     # ── 步骤分发 ──────────────────────────────────────────────────
 
@@ -500,10 +511,11 @@ class WorkflowEngine:
         # 执行前检查
         precheck = step.get("precheck")
         if precheck:
-            pc_result = self._handle_assert({"type": "assert", **precheck[0]})
-            if pc_result.get("status") == "blocked":
-                print(f"[auto:{step_id}] ⛔ 前置检查未通过，跳过执行", file=sys.stdout)
-                return {**pc_result, "auto_advance": False}
+            for _pc in precheck:
+                pc_result = self._handle_assert({"type": "assert", **_pc})
+                if pc_result.get("status") == "blocked":
+                    print(f"[auto:{step_id}] ⛔ 前置检查未通过，跳过执行", file=sys.stdout)
+                    return {**pc_result, "auto_advance": False}
 
         # 更新重试计数
         pre_action = step.get("pre_action", [])
@@ -634,12 +646,28 @@ class WorkflowEngine:
 
         save_flow_gate(self.project_dir, self.fg)
 
+        # 重新同步内存状态（current_phase / step 列表等），
+        # 否则 self.current_phase 仍是旧阶段，导致返回 JSON 的 phase 字段与
+        # 已存盘的 currentPhase 矛盾（如误报 VERIFY_AND_REPORT 而非 COMPLETED）
+        self.__init__(self.project_dir)
+
         # ⛔ 不自动推进：让 AI 重新调用引擎查看新阶段的第一步
         return self._result("phase_changed",
             f"阶段切换: → {next_phase}",
             next_phase=next_phase,
             auto_advance=False,
             next_action=f"python workflow_engine.py --project \"{self.project_dir}\"")
+
+    def set_state(self, pairs: list) -> dict:
+        """通过 --set KEY=VALUE 写入状态字段（点号语法，如 projectInfo.buildMode=full）"""
+        applied = {}
+        for item in pairs:
+            if "=" not in item:
+                continue
+            key, value = item.split("=", 1)
+            self._apply_update_state({key: value})
+            applied[key] = value
+        return self._result("state_set", f"已更新状态: {applied}", applied=applied)
 
     def _handle_goto_step(self, step: dict) -> dict:
         """跳转到指定步骤"""
@@ -668,6 +696,17 @@ class WorkflowEngine:
         return self._result("goto_step", f"跳转到: {target_step}",
                             auto_advance=False,
                             next_action=f"python workflow_engine.py --project \"{self.project_dir}\"")
+
+    def set_state(self, pairs: list) -> dict:
+        """通过 --set KEY=VALUE 写入状态字段（点号语法，如 projectInfo.buildMode=full）"""
+        applied = {}
+        for item in pairs:
+            if "=" not in item:
+                continue
+            key, value = item.split("=", 1)
+            self._apply_update_state({key: value})
+            applied[key] = value
+        return self._result("state_set", f"已更新状态: {applied}", applied=applied)
 
     def _handle_assert(self, step: dict) -> dict:
         """断言检查 — 同时处理 on_success 和 on_fail"""
@@ -713,6 +752,17 @@ class WorkflowEngine:
                 next_phase=next_phase,
                 auto_advance=False,
                 next_action=f"python workflow_engine.py --project \"{self.project_dir}\"")
+
+    def set_state(self, pairs: list) -> dict:
+        """通过 --set KEY=VALUE 写入状态字段（点号语法，如 projectInfo.buildMode=full）"""
+        applied = {}
+        for item in pairs:
+            if "=" not in item:
+                continue
+            key, value = item.split("=", 1)
+            self._apply_update_state({key: value})
+            applied[key] = value
+        return self._result("state_set", f"已更新状态: {applied}", applied=applied)
 
         return self._result("all_completed", "所有阶段已完成 ✅",
                             auto_advance=False,
@@ -770,8 +820,19 @@ class WorkflowEngine:
         if len(parts) >= 2:
             section = parts[0].strip()
             field_op = parts[-1].strip()
-            # 解析 "retryCount < 2"
             import re
+            # 字符串比较: projectInfo / buildMode == "full"
+            m_str = re.match(r'(\w+)\s*(==|!=)\s*"?([\w]+)"?', field_op)
+            if m_str:
+                fname = m_str.group(1)
+                op = m_str.group(2)
+                expected = m_str.group(3)
+                actual = self.fg.get(section, {}).get(fname, "")
+                if op == "==":
+                    return str(actual) == expected
+                elif op == "!=":
+                    return str(actual) != expected
+            # 数值比较: debugLoopInfo / retryCount < 2
             m = re.match(r'(\w+)\s*([<>=!]+)\s*(\d+)', field_op)
             if m:
                 fname = m.group(1)
@@ -831,6 +892,8 @@ def main():
     parser.add_argument("--done", action="store_true", help="标记当前步骤完成，推进到下一步")
     parser.add_argument("--reset", action="store_true", help="重置为新任务")
     parser.add_argument("--jump", help="跳转到指定阶段 (STARTUP/DEBUG_LOOP/VERIFY_AND_REPORT)")
+    parser.add_argument("--set", action="append", metavar="KEY=VALUE",
+                        help="设置状态字段，可多次，如 --set projectInfo.buildMode=full")
     parser.add_argument("--mode", type=int, choices=[0, 1], default=None,
                         help="0=只读当前状态(不推进) 1=推进当前步骤(执行)")
 
@@ -852,6 +915,8 @@ def main():
         result = engine.reset()
     elif args.jump:
         result = engine.jump(args.jump.upper())
+    elif args.set:
+        result = engine.set_state(args.set)
     elif args.mode == 0:
         result = engine.show_status()
     elif args.done:

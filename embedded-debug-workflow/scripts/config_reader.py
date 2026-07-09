@@ -282,8 +282,18 @@ def init_project(project_dir: str) -> dict[str, Any]:
         print(f"  发现 {len(detected)} 个工程:")
         for i, p in enumerate(detected):
             print(f"    [{i}] {p['name']}  →  {p['dir']}\\{p['file']}")
+        import re
         use_all = _ask("  是否全部采用？(Y/n，或输入编号以逗号分隔）")
-        if use_all.lower() in ("n", "no"):
+        # 如果输入包含数字，直接作为编号选择处理（兼容"2"或"0,2"等格式）
+        if re.search(r'\d', use_all):
+            indices_str = use_all
+            for idx_str in indices_str.split(","):
+                idx_str = idx_str.strip()
+                if idx_str.isdigit() and 0 <= int(idx_str) < len(detected):
+                    projects.append(detected[int(idx_str)])
+            if not projects:
+                print("  ⚠️ 未选择任何工程，进入手动添加")
+        elif use_all.lower() in ("n", "no"):
             indices_str = _ask("  请输入要采用的工程编号（逗号分隔，如 0,1）")
             if indices_str:
                 for idx_str in indices_str.split(","):

@@ -15,7 +15,7 @@ python scripts/keil_build.py --project "RU3.uvprojx" --rebuild
 python scripts/build_and_flash.py
 
 # 串口抓日志
-python scripts/serial_monitor.py --duration 15 --save logs/output.log
+python scripts/serial_monitor.py --duration 15 --save .copilot/logs/output.log
 ```
 
 ## 脚本索引

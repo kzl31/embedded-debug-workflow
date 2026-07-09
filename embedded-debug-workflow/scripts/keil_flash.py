@@ -45,6 +45,15 @@ def find_uv4(config: dict | None = None) -> str | None:
     return None
 
 
+def _logs_dir(proj_dir: Path) -> Path:
+    """定位 <workspace>/.copilot/logs：从工程目录向上查找含 .copilot 的目录。"""
+    p = proj_dir.resolve()
+    for cand in [p, *p.parents]:
+        if (cand / ".copilot").is_dir():
+            return cand / ".copilot" / "logs"
+    return p.parent / ".copilot" / "logs"
+
+
 def flash_project(
     uv4_path: str,
     project_dir: str,
@@ -59,7 +68,7 @@ def flash_project(
             "summary": f"工程目录不存在: {project_dir}",
         }
 
-    log_path = log_file or str(proj_dir / "flash_log.txt")
+    log_path = log_file or str(_logs_dir(proj_dir) / "flash_log.txt")
     cmd = f'"{uv4_path}" -f "{project_file}" -o "{log_path}"'
 
     print(f"[keil_flash] 🔥 下载固件: {project_file}")

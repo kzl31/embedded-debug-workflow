@@ -13,6 +13,8 @@ gates/ 中的文件     是唯一操作入口
 未读到对应门禁文件  = 禁止执行对应操作
 ```
 
+> AI 的**行为类强制规则**（交互/Git/宏/路径/迭代上限）见 `refs/core-rules.md`，本文件只规定流程门禁纪律，不重复后者内容。
+
 ---
 
 ## 规则 1：启动预检（每次操作前必须执行）
@@ -23,7 +25,7 @@ gates/ 中的文件     是唯一操作入口
 步骤 3: 检查引擎输出中的 currentPhase
 步骤 4: 在 registry 中查找 currentPhase 对应的 gateFile
   ├─ 找到 → 读取 gates/ 下对应的门禁文件
-  ├─ 找不到 / currentPhase == null → 读取 gates/STARTUP.md
+  ├─ 找不到 / currentPhase == null → 读取 gates/STARTUP.yaml
   └─ currentPhase == "COMPLETED" → 允许读取任何门禁（继续或新任务）
 ```
 

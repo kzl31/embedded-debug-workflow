@@ -30,13 +30,13 @@ embedded-debug-workflow/
 ├── gates/                 # Flow Gate 门禁文件（结构化的 YAML 步骤）
 │   ├── FLOW_GATE_RULES.md #   门禁总规则（引用 registry，不硬编码）
 │   ├── STARTUP.yaml       #   启动阶段（采集故障现象+确认工程配置）
-
 │   ├── DEBUG_LOOP.yaml    #   调试循环（8轮迭代）
 │   └── VERIFY_AND_REPORT.yaml # 验证与报告阶段（末步自动生成报告+写记忆）
 ├── commands/              # /kzl 快捷命令入口
-│   ├── help.md            #   /kzl 帮助
-│   ├── init.md            #   /kzl 初始化
-│   └── build.md           #   /kzl 编译
+│   ├── help.md            #   /kzl bz（帮助）
+│   ├── init.md            #   /kzl csh（初始化）
+│   ├── build.md           #   /kzl by（仅编译）/ /kzl byxz（编译下载）
+│   └── add-flow.md        #   /kzl zjlc（增加流程）
 ├── scripts/               # Python 自动化脚本
 │   ├── skill-config.json  #   脚本默认配置（Keil路径/串口/JLink参数）
 │   ├── config_reader.py   #   配置文件读写 (Python)
@@ -45,24 +45,22 @@ embedded-debug-workflow/
 │   ├── build_and_flash.py #   一键编译+下载 (Python)
 │   ├── serial_read.py     #   串口单次读取 (Python)
 │   ├── serial_monitor.py  #   串口持续监听 (Python)
-│   └── batch_build.py     #   多工程批量操作 (Python)
+│   ├── batch_build.py     #   多工程批量操作 (Python)
+│   └── workflow_engine.py #   流程引擎（纯解析器）
 ├── refs/                 # AI 按需加载的详细规范
 │   ├── core-rules.md      #   5 条强制规则
-│   ├── workflow-overview.md # 10 步工作流总览
-│   ├── project-setup.md   #   快速开始 + 配置存放
 │   ├── script-commands.md #   脚本命令参考
 │   ├── config-format.md   #   配置文件格式说明
-│   ├── checklist.md       #   迭代检查清单
 │   ├── debug-loop.md      #   核心调试循环（8轮迭代）
 │   ├── git-rules.md       #   Git 本地版本管理
-│   ├── cheshi-macro.md    #   CHESHI 宏规范
+│   ├── cheshi-macro.md    #   CHESHI 宏规范（含 ISR 安全打印）
 │   ├── pause-scenarios.md #   人工暂停规范
-│   ├── common-faults.md   #   常见故障速查 & Map 分析
-│   ├── jlink-debug.md     #   JLink Commander 调试
-│   ├── map-analysis.md    #   Map 文件分析
-│   └── isr-debug.md       #   中断安全打印
+│   ├── common-faults.md   #   常见故障速查 & JLink/Map 分析
+│   └── add-flow-guide.md  #   新增步骤/阶段指南
 ├── templates/             # 模板文件
+│   ├── checklist.md       #   迭代检查清单（含验证方法与常见问题速查）
 │   ├── report.md          #   故障报告模板
+│   ├── abort-report.md    #   🛑 流程违规退出标准格式
 │   └── cheshi_snippet.c   #   CHESHI 宏代码模板
 └── data/                 # 运行时数据（自动生成）
     └── debug-history.yaml #   调试历史索引
@@ -86,9 +84,8 @@ Skill 激活后，AI 自动执行 Flow Gate 门禁流程：
 ```
 ① 运行引擎（--mode 0）读取当前状态 → 检查 currentPhase
    ├─ STARTUP     → 读取 gates/STARTUP.yaml，采集故障现象并确认工程配置
-
-   ├─ DEBUG_LOOP  → 读取 gates/DEBUG_LOOP.md，进入调试循环
-   ├─ VERIFY_...  → 读取 gates/VERIFY_AND_REPORT.md，验证与报告
+   ├─ DEBUG_LOOP  → 读取 gates/DEBUG_LOOP.yaml，进入调试循环
+   ├─ VERIFY_...  → 读取 gates/VERIFY_AND_REPORT.yaml，验证与报告
    └─ COMPLETED   → 允许重新开始
 ② 若无 embedded-debug-config.json → 自动执行 --init 初始化
 ③ 按门禁文件 Step 1..N 顺序执行，引擎自动维护内部状态
@@ -115,6 +112,17 @@ Skill 激活后，AI 自动执行 Flow Gate 门禁流程：
 - **Git 管控**：仅本地操作，禁止 git push；调试分支命名 `debug/故障简述_YYYYMMDD`
 - **8 轮上限**：自动加打印满 8 轮仍无法定位 → 触发人工求助
 - **三类暂停**：设备断电重启 / Keil 断点调试 / 迭代上限求助
+
+## 🛑 流程违规退出
+
+由 **AI 在对话中自行判定**：只要发现当前情形不符合流程（用户强制跳过步骤、要求阶段禁止的操作、
+未初始化就操作、跳跃步骤、直接读状态文件等），AI 必须**立即退出执行**，并输出标准格式中止通告。
+
+- **判定方是 AI 自己，不依赖脚本**：AI 在对话中识别违规情形（含用户要求跳过流程），随即停止一切后续动作。
+- **违规即退出执行**：AI 立即停止编译/下载/分析/读状态文件/报告等所有操作，按 `templates/abort-report.md`
+  的**标准格式**输出 `⛔ 流程中止通告（FLOW ABORT）`，等待用户重新 `--init`。
+- 违规类型（AI 据情形自行选填）：`user_skip_step` / `user_forbidden_op` / `not_initialized` /
+  `out_of_order` / `read_state_file` / `phase_mismatch`。
 
 ## 📄 报告模板
 

@@ -137,7 +137,7 @@ python scripts/build_and_flash.py
 python scripts/serial_read.py --timeout 3
 
 # 持续监听（捕获完整启动日志）
-python scripts/serial_monitor.py --duration 15 --save logs/debug_round_1.log
+python scripts/serial_monitor.py --duration 15 --save .copilot/logs/debug_round_1.log
 ```
 
 ### 第 6 步：分析日志
@@ -179,16 +179,7 @@ python scripts/serial_monitor.py --duration 10
 
 ## 迭代检查清单
 
-每次自动迭代/修复完成后逐项校验；**完整版（含验证方法与验收标准）见 `templates/checklist.md`**：
-
-- [ ] 配置完整（`config_reader.py --validate` 通过）
-- [ ] 串口参数与配置一致，监听参数取自 `serial`
-- [ ] 编译 `0 Error`、无阻塞性 Warning
-- [ ] 固件下载成功（`Flash Load finished`），日志存在预期调试打印
-- [ ] 调试打印信息可支撑故障定位
-- [ ] 业务修改仅影响目标模块，无连锁副作用
-- [ ] 修复完成后已全部清理 CHESHI 调试代码
-- [ ] 最终版本编译下载正常通过，验证日志已保存
+每次自动迭代/修复完成后逐项校验，完整清单（含验证方法与验收标准）见 `templates/checklist.md`。
 
 ---
 

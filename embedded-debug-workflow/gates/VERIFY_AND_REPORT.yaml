@@ -28,15 +28,40 @@ steps:
   # ============================================================
   # Step 3: 编译 + 下载 + 验证
   # ============================================================
-  - id: step_verify
-    description: "编译下载并验证故障已解决"
+  - id: step_verify_build
+    description: "编译并验证故障已解决（buildMode=none 时跳过）"
     type: run_script
-    script: 'python scripts/build_and_flash.py --config-dir "{project_dir}"'
+    script: 'python scripts/keil_build.py --config-dir "{project_dir}"'
+    precheck:
+      - type: assert
+        condition: "projectInfo / buildMode != \"none\""
+        on_fail:
+          - type: goto_step
+            step: step_regression
+    on_success:
+      - type: log_info
+        message: "编译通过"
+    on_failure:
+      - type: goto_step
+        step: step_analyze
+        gate: "gates/DEBUG_LOOP.yaml"
+        description: "验证失败，返回 DEBUG_LOOP 重新分析"
+
+  - id: step_verify_flash
+    description: "下载固件并验证（仅 buildMode=full 执行）"
+    type: run_script
+    script: 'python scripts/keil_flash.py --config-dir "{project_dir}"'
+    precheck:
+      - type: assert
+        condition: "projectInfo / buildMode == \"full\""
+        on_fail:
+          - type: goto_step
+            step: step_regression
     on_success:
       - type: log_info
         message: "验证通过，故障已解决"
       - type: run_script
-        script: 'python scripts/serial_monitor.py --duration 10 --save "{project_dir}/.copilot/verify_log.txt"'
+        script: 'python scripts/serial_monitor.py --duration 10 --save "{project_dir}/.copilot/logs/verify_log.txt"'
         description: "串口监听验证"
     on_failure:
       - type: goto_step
@@ -55,7 +80,7 @@ steps:
       - "串口参数与配置一致：监听端口/波特率取自对应工程的 serial"
       - "编译输出 0 Error、无阻塞性 Warning"
       - "固件下载成功：日志出现 Flash Load finished / Verify OK"
-      - "验证日志已保存到 {项目目录}/.copilot/verify_log.txt"
+      - "验证日志已保存到 {项目目录}/.copilot/logs/verify_log.txt"
       - "调试打印信息充分，可支撑故障定位"
       - "业务修改仅影响目标模块，无连锁副作用（长度/偏移/缓冲区边界已复核）"
       - "原故障现象消失，其它模块（通信/定时器/中断/外设）正常"
@@ -69,7 +94,7 @@ steps:
     description: "生成标准化报告 .md + 写记忆索引"
     type: generate_report
     report_template: "templates/report.md"
-    report_path: "{project_dir}/.copilot/{date}_{short_desc}.md"
+    report_path: "{project_dir}/.copilot/报告/{date}_{short_desc}.md"
     report_fields:
       - fault_description
       - root_cause

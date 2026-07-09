@@ -57,6 +57,15 @@ def find_uv4(config: dict | None = None) -> str | None:
     return None
 
 
+def _logs_dir(proj_dir: Path) -> Path:
+    """定位 <workspace>/.copilot/logs：从工程目录向上查找含 .copilot 的目录。"""
+    p = proj_dir.resolve()
+    for cand in [p, *p.parents]:
+        if (cand / ".copilot").is_dir():
+            return cand / ".copilot" / "logs"
+    return p.parent / ".copilot" / "logs"
+
+
 def build_project(
     uv4_path: str,
     project_dir: str,
@@ -76,7 +85,7 @@ def build_project(
         }
 
     # 构建命令
-    log_path = log_file or str(proj_dir / "build_log.txt")
+    log_path = log_file or str(_logs_dir(proj_dir) / "build_log.txt")
     if rebuild:
         cmd = f'"{uv4_path}" -r "{project_file}" -o "{log_path}"'
     else:
