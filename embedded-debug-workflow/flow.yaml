@@ -91,30 +91,57 @@ steps:
           projectInfo.serialConfirmed: true
 
   - seq: 2
+    id: step_check_memory
+    phase: STARTUP
+    what: "查看调试记忆：检查 data/debug-history.yaml 中是否有相似故障的历史修复记录"
+    action: analyze
+    params:
+      target: data/debug-history.yaml
+      note: |
+        请读取 data/debug-history.yaml 文件，查看其中记录的过往故障和修复方案。
+        对比当前故障现象，判断是否有相似的历史案例可以借鉴：
+        - 若有相似故障，记录其根因和修复方案，在后续调试中优先参考
+        - 若历史中有多次相似故障，分析是否有共性问题
+        - 若无相似案例，标记为首次遇到此类故障，继续后续流程
+        完成后 --ack success 推进。
+    precheck: []
+    pre_action: []
+    on_success:
+      - update_state:
+          projectInfo.memoryChecked: true
+      - goto: 3
+    on_failure:
+      - goto: 3
+
+  - seq: 3
     id: step_collect_params
     phase: STARTUP
-    what: "采集参数：故障现象 + 工程配置确认 + 编译下载模式（共三轮提问）"
+    what: "采集参数：故障现象 + 工程配置确认 + 编译下载模式（三轮交互式提问）"
     action: ask_user
     params:
       template: |
-        请向我（用户）提问**如果有选项框工具，请务必使用选项框**：
+        请使用你环境中可用的交互式选择工具（如选项框、多选组件等）向我（用户）提问，让用户直接点击选项作答，而非打字输入。每轮最多 3 个问题：
 
-        ▶ 第一轮（共 5 条）
-        1️⃣ 工程配置是否已完成？ 若未完成，请直接在 embedded-debug-config.json 中补全串口/下载器/工程目录后保存，回到此处确认。【已完成 / 未完成】
-        2️⃣ 本次需要编译下载吗？ 【编译+下载（完整流程） / 仅编译不下载 / 暂不编译下载（仅定位问题）】
-        3️⃣~5️⃣ （由你根据我开场描述的故障动态生成，用于确定到底是什么问题；例如：现象细节、复现条件、相关模块/接口、已有排查手段等，每条附【选项】）
+        ▶ 第一轮（调用 2 次选择工具）
+        第 1 次（2 个问题）：
+          - 工程配置是否已完成？【已完成 / 未完成】
+          - 本次需要编译下载吗？【编译+下载（完整流程） / 仅编译不下载 / 暂不编译下载（仅定位问题）】
+        第 2 次（最多 3 个问题）：
+          - 根据我开场描述的故障动态生成，用于确定到底是什么问题（现象细节、复现条件、相关模块/接口等），每条附 2-3 个选项。
 
-        ▶ 第二轮（最多 3 条）
-        根据你上一轮的回答继续追问，进一步锁定根因方向（每条：问题？ 说明。【选项】）。
+        ▶ 第二轮（调用 1 次选择工具，最多 3 个问题）
+        根据上一轮的回答继续追问，进一步锁定根因方向。
 
-        ▶ 第三轮（最多 3 条）
-        仍不确定时再补充追问（如变更点 / 复现频率 / 相关模块预期行为 / 可提供的额外日志）。
-        三轮结束后，请明确记录我的选择并继续。
+        ▶ 第三轮（调用 1 次选择工具，最多 3 个问题）
+        仍不确定时再补充追问（变更点 / 复现频率 / 相关模块预期行为 / 可提供的额外日志）。
+        三轮结束后，用 --set projectInfo.buildMode=<full|compile_only|none> 记录编译模式，再 --ack success 推进。
       note: |
-        你（AI）先读取用户在开场描述的问题，再动态生成澄清问题，共三轮：
-          第一轮 5 条（含工程配置确认、编译下载模式确认、3 条动态故障澄清）；
-          第二轮最多 3 条（继续追问锁定根因）；
-          第三轮最多 3 条（仍不确定时再补充追问）。
+        你（AI）优先使用环境中可用的交互式选择工具（如选项框、按钮组件等）来提问，让用户点击选择而非打字：
+          - 每个问题提供 2-3 个互斥选项，第一个为推荐选项
+          - 问题描述用单句，选项描述用一句话说明影响
+          - 三轮共调用 4 次工具：第一轮 2 次，第二轮 1 次，第三轮 1 次
+          - 所有轮次结束后，根据用户选择用 --set 命令记录关键参数，再 --ack success
+        如果你的环境没有交互式选择工具，则回退为纯文本 Q&A 方式提问。
         确认后用 --set projectInfo.buildMode=<full|compile_only|none> 记录，再 --ack success 推进。
     precheck: []
     pre_action: []
@@ -125,11 +152,11 @@ steps:
       - log:
           level: info
           msg: "参数已确认，进入调试流程"
-      - goto: 3
+      - goto: 4
     on_failure:
-      - goto: 2
+      - goto: 3
 
-  - seq: 3
+  - seq: 4
     id: step_to_debug
     phase: STARTUP
     what: "STARTUP 阶段完成，进入调试循环"
@@ -137,14 +164,14 @@ steps:
     precheck: []
     pre_action: []
     on_success:
-      - goto: 4
+      - goto: 5
     on_failure:
-      - goto: 4
+      - goto: 5
 
   # ============================================================
   # DEBUG_LOOP 阶段
   # ============================================================
-  - seq: 4
+  - seq: 5
     id: step_analyze
     phase: DEBUG_LOOP
     what: "仅定位可疑代码位置（不是根因裁决点，严禁在此汇报/询问）"
@@ -172,16 +199,16 @@ steps:
     on_success:
       - when: 'projectInfo.buildMode == "full"'
         then:
-          - goto: 5
+          - goto: 6
         else:
           - log:
               level: info
               msg: "未下载固件（buildMode≠full），跳过插入 CHESHI 调试打印"
-          - goto: 6
+          - goto: 7
     on_failure:
-      - goto: 4
+      - goto: 5
 
-  - seq: 5
+  - seq: 6
     id: step_add_cheshi
     phase: DEBUG_LOOP
     what: "在可疑位置插入 CHESHI 调试打印（仅 buildMode=full 时执行；迭代验证手段，严禁停下）"
@@ -202,11 +229,11 @@ steps:
     on_success:
       - update_state:
           debugLoopInfo.cheshiAdded: true
-      - goto: 6
+      - goto: 7
     on_failure:
-      - goto: 5
+      - goto: 6
 
-  - seq: 6
+  - seq: 7
     id: step_compile
     phase: DEBUG_LOOP
     what: "编译固件"
@@ -215,21 +242,21 @@ steps:
     precheck:
       - assert: 'projectInfo.buildMode != "none"'
         on_fail:
-          - goto: 7
+          - goto: 8
     pre_action: []
     on_success:
       - update_state:
           debugLoopInfo.lastBuildStatus: "success"
-      - goto: 7
+      - goto: 8
     on_failure:
       - update_state:
           debugLoopInfo.lastBuildStatus: "failure"
       - log:
           level: warning
           msg: "编译失败，修正后返回加打印"
-      - goto: 5
+      - goto: 6
 
-  - seq: 7
+  - seq: 8
     id: step_flash
     phase: DEBUG_LOOP
     what: "下载固件到目标板"
@@ -244,7 +271,7 @@ steps:
           - exit: COMPLETED
       - assert: 'projectInfo.buildMode == "full"'
         on_fail:
-          - goto: 8
+          - goto: 9
     pre_action:
       - update_state:
           debugLoopInfo.retryCount: "+1"
@@ -252,7 +279,7 @@ steps:
       - update_state:
           debugLoopInfo.lastFlashStatus: "success"
           debugLoopInfo.retryCount: 0
-      - goto: 8
+      - goto: 9
     on_failure:
       - update_state:
           debugLoopInfo.lastFlashStatus: "failure"
@@ -263,9 +290,9 @@ steps:
               msg: "连续2次下载失败（retryCount=2），结束流程"
           - exit: COMPLETED
         else:
-          - goto: 7
+          - goto: 8
 
-  - seq: 8
+  - seq: 9
     id: step_capture_log
     phase: DEBUG_LOOP
     what: "启动串口监听，捕获日志（仅 buildMode=full 且已下载时执行）"
@@ -277,7 +304,7 @@ steps:
           - log:
               level: info
               msg: "未下载固件（buildMode≠full），跳过串口监听"
-          - goto: 9
+          - goto: 10
       - assert: "debugLoopInfo.retryCount < 2"
         on_fail:
           - log:
@@ -290,7 +317,7 @@ steps:
     on_success:
       - update_state:
           debugLoopInfo.retryCount: 0
-      - goto: 9
+      - goto: 10
     on_failure:
       - update_state:
           debugLoopInfo.lastFlashStatus: "failure"
@@ -301,9 +328,9 @@ steps:
               msg: "连续2次串口打开失败（retryCount=2），结束流程"
           - exit: COMPLETED
         else:
-          - goto: 8
+          - goto: 9
 
-  - seq: 9
+  - seq: 10
     id: step_analyze_result
     phase: DEBUG_LOOP
     what: "分析日志是否足以定位根因"
@@ -323,7 +350,7 @@ steps:
     on_success:
       - update_state:
           debugLoopInfo.rootCauseFound: true
-      - goto: 11            # 跳过追问环节，直接进入验证阶段
+      - goto: 12            # 跳过追问环节，直接进入验证阶段
     on_failure:
       - when: "debugLoopInfo.askUser == true"
         then:
@@ -340,7 +367,7 @@ steps:
               - log:
                   level: warning
                   msg: "AI 没信心，进入追问环节"
-              - goto: 10           # 追问用户
+              - goto: 11           # 追问用户
         else:
           - when: "debugLoopInfo.iterationCount >= 8"
             then:
@@ -351,9 +378,9 @@ steps:
             else:
               - update_state:
                   debugLoopInfo.iterationCount: "+1"
-              - goto: 5            # 返回加打印，继续迭代
+              - goto: 6            # 返回加打印，继续迭代
 
-  - seq: 10
+  - seq: 11
     id: step_ask_clarify
     phase: DEBUG_LOOP
     what: "向用户追问以厘清根因方向（AI 没信心时进入）"
@@ -372,14 +399,14 @@ steps:
     precheck: []
     pre_action: []
     on_success:
-      - goto: 9            # 回到分析，结合新信息重新判断
+      - goto: 10            # 回到分析，结合新信息重新判断
     on_failure:
-      - goto: 9
+      - goto: 10
 
   # ============================================================
   # VERIFY_AND_REPORT 阶段
   # ============================================================
-  - seq: 11
+  - seq: 12
     id: step_clean_cheshi
     phase: VERIFY_AND_REPORT
     what: "删除所有 CHESHI 调试代码块，恢复源代码"
@@ -392,11 +419,11 @@ steps:
     on_success:
       - update_state:
           verifyReport.cheshiCleaned: true
-      - goto: 12
+      - goto: 13
     on_failure:
-      - goto: 11
+      - goto: 12
 
-  - seq: 12
+  - seq: 13
     id: step_fix_code
     phase: VERIFY_AND_REPORT
     what: "根据根因分析结果修改业务代码，最小化改动范围"
@@ -407,11 +434,11 @@ steps:
     precheck: []
     pre_action: []
     on_success:
-      - goto: 13
+      - goto: 14
     on_failure:
-      - goto: 12
+      - goto: 13
 
-  - seq: 13
+  - seq: 14
     id: step_verify_build
     phase: VERIFY_AND_REPORT
     what: "编译并验证故障已解决（buildMode=none 时跳过）"
@@ -420,17 +447,17 @@ steps:
     precheck:
       - assert: 'projectInfo.buildMode != "none"'
         on_fail:
-          - goto: 14
+          - goto: 15
     pre_action: []
     on_success:
       - log:
           level: info
           msg: "编译通过"
-      - goto: 14
+      - goto: 15
     on_failure:
-      - goto: 4
+      - goto: 5
 
-  - seq: 14
+  - seq: 15
     id: step_verify_flash
     phase: VERIFY_AND_REPORT
     what: "下载固件并验证（仅 buildMode=full 执行）"
@@ -439,18 +466,18 @@ steps:
     precheck:
       - assert: 'projectInfo.buildMode == "full"'
         on_fail:
-          - goto: 15
+          - goto: 16
     pre_action: []
     on_success:
       - log:
           level: info
           msg: "验证通过，故障已解决"
       - run_script: 'python scripts/serial_monitor.py --duration 10 --save "{project_dir}/.copilot/logs/verify_log.txt"'
-      - goto: 15
+      - goto: 16
     on_failure:
-      - goto: 4
+      - goto: 5
 
-  - seq: 15
+  - seq: 16
     id: step_regression
     phase: VERIFY_AND_REPORT
     what: "确认修复未引入新问题，其他功能模块正常"
@@ -470,11 +497,11 @@ steps:
     precheck: []
     pre_action: []
     on_success:
-      - goto: 16
+      - goto: 17
     on_failure:
-      - goto: 15
+      - goto: 16
 
-  - seq: 16
+  - seq: 17
     id: step_report
     phase: VERIFY_AND_REPORT
     what: "生成标准化报告 .md + 写记忆索引"
@@ -503,11 +530,11 @@ steps:
           debugSession.reportFile: "{report_path}"
           debugSession.memorySaved: true
           debugSession.endTime: "{now}"
-      - goto: 17
+      - goto: 18
     on_failure:
-      - goto: 16
+      - goto: 17
 
-  - seq: 17
+  - seq: 18
     id: step_complete
     phase: VERIFY_AND_REPORT
     what: "标记全部流程完成"
