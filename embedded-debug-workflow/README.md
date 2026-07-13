@@ -7,9 +7,11 @@
 本 Skill 定义了一套完整的嵌入式固件调试自动化工作流，覆盖从问题发现到标准化报告输出的全链路：
 
 ```
-问题发现 → 故障分类诊断 → CHESHI调试打印迭代 → 自动编译下载 
+问题发现 → 故障分类诊断 → CHESHI调试打印迭代 → 自动编译下载
 → 串口日志解析 → 业务代码修复 → 回归验证 → 标准化报告
 ```
+
+流程定义集中在单一文件 **`flow.yaml`**（线性序号步骤表），引擎 `workflow_engine.py` 是零硬编码的纯查表+序号跳转解析器。
 
 ## 🎯 适用场景
 
@@ -25,20 +27,14 @@
 ```
 embedded-debug-workflow/
 ├── README.md              # 本文件
-├── SKILL.md               # AI 核心入口（精简：元数据 + 目录索引 + Flow Gate 预检）
-├── registry.json           # 🔑 阶段注册中心（唯一权威：阶段名→门禁文件映射）
-├── gates/                 # Flow Gate 门禁文件（结构化的 YAML 步骤）
-│   ├── FLOW_GATE_RULES.md #   门禁总规则（引用 registry，不硬编码）
-│   ├── STARTUP.yaml       #   启动阶段（采集故障现象+确认工程配置）
-│   ├── DEBUG_LOOP.yaml    #   调试循环（8轮迭代）
-│   └── VERIFY_AND_REPORT.yaml # 验证与报告阶段（末步自动生成报告+写记忆）
+├── SKILL.md               # AI 核心入口（铁律 + 引擎调用方式 + flow.yaml 格式速查）
+├── flow.yaml              # 🔑 流程唯一真相源（线性序号步骤表，含 phase 分组）
 ├── commands/              # /kzl 快捷命令入口
-│   ├── help.md            #   /kzl bz（帮助）
-│   ├── init.md            #   /kzl csh（初始化）
-│   ├── build.md           #   /kzl by（仅编译）/ /kzl byxz（编译下载）
-│   └── add-flow.md        #   /kzl zjlc（增加流程）
+│   ├── help.md            #   /kzl 帮助（帮助）
+│   ├── init.md            #   /kzl 初始化（初始化配置）
+│   ├── build.md           #   /kzl 编译（仅编译）/ /kzl 编译下载（编译下载）
+│   └── add-flow.md        #   /kzl 新增流程（新增步骤/阶段 → 编辑 flow.yaml）
 ├── scripts/               # Python 自动化脚本
-│   ├── skill-config.json  #   脚本默认配置（Keil路径/串口/JLink参数）
 │   ├── config_reader.py   #   配置文件读写 (Python)
 │   ├── keil_build.py      #   Keil 编译 (Python)
 │   ├── keil_flash.py      #   固件下载 (Python)
@@ -46,9 +42,9 @@ embedded-debug-workflow/
 │   ├── serial_read.py     #   串口单次读取 (Python)
 │   ├── serial_monitor.py  #   串口持续监听 (Python)
 │   ├── batch_build.py     #   多工程批量操作 (Python)
-│   └── workflow_engine.py #   流程引擎（纯解析器）
-├── refs/                 # AI 按需加载的详细规范
-│   ├── core-rules.md      #   5 条强制规则
+│   └── workflow_engine.py #   🔑 流程引擎（查表 + 序号跳转，零硬编码步骤）
+├── refs/                  # AI 按需加载的详细规范
+│   ├── core-rules.md      #   强制规则（AI 行为约束）
 │   ├── script-commands.md #   脚本命令参考
 │   ├── config-format.md   #   配置文件格式说明
 │   ├── debug-loop.md      #   核心调试循环（8轮迭代）
@@ -56,13 +52,15 @@ embedded-debug-workflow/
 │   ├── cheshi-macro.md    #   CHESHI 宏规范（含 ISR 安全打印）
 │   ├── pause-scenarios.md #   人工暂停规范
 │   ├── common-faults.md   #   常见故障速查 & JLink/Map 分析
-│   └── add-flow-guide.md  #   新增步骤/阶段指南
+│   ├── add-flow-guide.md  #   新增步骤/阶段指南（编辑 flow.yaml）
+│   └── workflow-diagram.md#   完整流程图（交互模式 + 序号流程）
 ├── templates/             # 模板文件
 │   ├── checklist.md       #   迭代检查清单（含验证方法与常见问题速查）
 │   ├── report.md          #   故障报告模板
 │   ├── abort-report.md    #   🛑 流程违规退出标准格式
+│   ├── flow-gate.json     #   状态文件模板（currentSeq 等）
 │   └── cheshi_snippet.c   #   CHESHI 宏代码模板
-└── data/                 # 运行时数据（自动生成）
+└── data/                  # 运行时数据（自动生成）
     └── debug-history.yaml #   调试历史索引
 ```
 
@@ -72,6 +70,7 @@ embedded-debug-workflow/
 |:---|:---|
 | **Python 3.8+** | 运行 Python 自动化脚本（推荐） |
 | **pyserial**（Python 用） | 串口通信（`pip install pyserial`） |
+| **PyYAML**（Python 用） | 解析 `flow.yaml`（`pip install pyyaml`） |
 | **Keil MDK** | ARM 编译环境（UV4.exe，路径固定为 `C:\Keil_v5\UV4\UV4.exe`） |
 | **J-Link / ST-Link** | 调试下载器 |
 
@@ -79,38 +78,39 @@ embedded-debug-workflow/
 
 ### 启动初始化流程
 
-Skill 激活后，AI 自动执行 Flow Gate 门禁流程：
+Skill 激活后，AI 按以下模式驱动引擎（**唯一流程入口**）：
 
 ```
-① 运行引擎（--mode 0）读取当前状态 → 检查 currentPhase
-   ├─ STARTUP     → 读取 gates/STARTUP.yaml，采集故障现象并确认工程配置
-   ├─ DEBUG_LOOP  → 读取 gates/DEBUG_LOOP.yaml，进入调试循环
-   ├─ VERIFY_...  → 读取 gates/VERIFY_AND_REPORT.yaml，验证与报告
-   └─ COMPLETED   → 允许重新开始
-② 若无 embedded-debug-config.json → 自动执行 --init 初始化
-③ 按门禁文件 Step 1..N 顺序执行，引擎自动维护内部状态
+① 新对话 → 运行引擎 --init 初始化（生成干净的 flow-gate.json 状态 + 扫描配置）
+② 运行引擎 --mode 0 读取当前状态（当前 seq / phase / 待办）
+③ 运行引擎 --mode 1 执行/推进当前步骤：
+   - 自动步骤（run_script/check_file/...）：引擎直接执行并按 flow.yaml 的
+     on_success / on_failure 自动跳转，直到遇到 AI 步骤或完成
+   - AI 步骤（ask_user/edit_source/analyze/report/...）：引擎输出指令（status=awaiting_ai），
+     AI 执行后提交 --ack success（或 --ack failure）
+   - 人工暂停（wait_user）：status=awaiting_user，处理完 --wake 恢复
+④ 重复 ②~③，直至 status=completed
 ```
 
 > `uv4_path`（`C:\Keil_v5\UV4\UV4.exe`）为固定系统路径，自动填入，不询问用户。
+> 所有流程逻辑（步骤顺序、跳转、条件）都写在 `flow.yaml`，引擎只是按 `seq` 查表执行。
 
 ### 典型调试流程
 
 ```
-1. AI 读取 data/config.json 获取环境参数
-2. STARTUP 阶段采集故障现象并确认工程配置
-3. AI 注入 CHESHI 调试宏，自动编译下载
-4. AI 抓取串口日志，迭代分析
-5. 定位根因后修复业务代码
-6. 回归验证，输出报告
-
-
+1. AI 读取 embedded-debug-config.json 获取环境参数（无则 --init 自动生成）
+2. STARTUP 阶段（flow.yaml seq 1~3）采集故障现象并确认工程配置
+3. AI 注入 CHESHI 调试宏，自动编译下载（seq 5~8）
+4. AI 抓取串口日志，迭代分析（seq 4 / seq 9）
+5. 定位根因后修复业务代码（seq 11）
+6. 回归验证，输出报告（seq 14~16）
 ```
 
 ## 📝 规范要点
 
 - **CHESHI 宏**：Bit 位掩码或数值分级，集中写在 main.c 头部，调试结束整段删除
 - **Git 管控**：仅本地操作，禁止 git push；调试分支命名 `debug/故障简述_YYYYMMDD`
-- **8 轮上限**：自动加打印满 8 轮仍无法定位 → 触发人工求助
+- **8 轮上限**：自动加打印满 8 轮仍无法定位 → 触发人工求助（`wait_user`）
 - **三类暂停**：设备断电重启 / Keil 断点调试 / 迭代上限求助
 
 ## 🛑 流程违规退出
@@ -128,6 +128,3 @@ Skill 激活后，AI 自动执行 Flow Gate 门禁流程：
 
 故障解决后自动输出标准化报告，包含问题描述、根因分析、修改文件清单、验证结果和影响范围。
 
-## 🤝 参考
-
-本 Skill 的蓝图来源于 `sad.md`（嵌入式固件调试工作流指南），架构参考了 `EM-SKILL` 和 `git-workflow` 的设计模式。

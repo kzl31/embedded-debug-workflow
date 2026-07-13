@@ -1,0 +1,6 @@
+*** Begin Patch
+*** Update File: scripts/workflow_engine.py
+@@ import json
+@@ import os
++ import base64
+*** End Patch

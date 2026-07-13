@@ -1,218 +1,124 @@
 # 嵌入式调试工作流 — 完整运行流程图
 
+> 本文件描述 **AI 与引擎的交互模式** 与 **flow.yaml 的三大阶段序号流程**。
+> 所有步骤、跳转、条件都在 `flow.yaml` 中定义，引擎只是按 `seq` 查表执行。
+
 ## 1. AI 与引擎交互模式
 
 ```mermaid
 flowchart TD
-    %% ═══════════════════════════════════════════════════════════
-    %% 引擎交互模式（外层驱动层）
-    %% ═══════════════════════════════════════════════════════════
     Start(["新对话开始 👤"]) --> Step0["⚡ 第零步: --init
         python workflow_engine.py --init --project <dir>"]
     Step0 --> InitOk{"引擎返回
         status='initialized'?"}
-    InitOk -->|✅ 是| Step1["⛔ 第一步: 读引擎
-        python workflow_engine.py --project <dir>"]
+    InitOk -->|✅ 是| Step1["🔍 读状态 / 执行:
+        python ... --mode 0 (只读快照)
+        python ... --mode 1 (执行当前步骤)"]
     InitOk -->|❌ 否| Step0
 
-    Step1 --> RunOk{"引擎返回 status?"}
+    Step1 --> RunOk{"--mode 1 返回 status?"}
 
-    RunOk -->|"awaiting_ai"| AiDo["🤖 AI 按指令执行
-        （ask_user / analyze_code / edit_source / analyze_result）"]
-    AiDo --> AiDone["执行完成后:
-        python ... --done"]
-    AiDone --> Step1
+    RunOk -->|"awaiting_ai"| AiDo["🤖 AI 按 what/params 执行
+        (ask_user / edit_source / analyze / report / check_regression)
+        完成后: python ... --ack success (或 --ack failure)"]
+    AiDo --> Step1
 
-    RunOk -->|"auto_executed"| AutoDone["引擎已自动完成
-        （check_file / run_script / update_state）
-        → python ... --done"]
+    RunOk -->|"auto_pending"| AutoDone["⚙️ 引擎已自动执行
+        (run_script / check_file / ...) 并按 on_success/on_failure 自动跳转"]
     AutoDone --> Step1
 
-    RunOk -->|"phase_changed"| PhaseNew["阶段切换
-        → 重新调用引擎"]
-    PhaseNew --> Step1
+    RunOk -->|"awaiting_user"| Wait["⏸ 人工暂停 (wait_user)
+        处理完: python ... --wake 恢复"]
+    Wait --> Step1
 
-    RunOk -->|"phase_completed"| PhaseDone["阶段完成，自动进入下一阶段"]
-    PhaseDone --> Step1
-
-    RunOk -->|"all_completed"| AllDone["✅ 全部完成
+    RunOk -->|"completed"| AllDone["✅ 全部完成
         → 使用 --reset 开始新任务"]
-
-    RunOk -->|"goto_step"| Goto["跳转到指定步骤
-        → 重新调用引擎"]
-    Goto --> Step1
-
-    RunOk -->|"blocked"| Blocked["⛔ 断言失败
-        → 查看 message 处理"]
-    Blocked --> Step1
 ```
 
-## 2. 三大阶段门禁流程
+> 提示：`--done` 是 `--ack success` 的别名；自动步骤无需 `--ack`，引擎已自动推进。
+
+## 2. 三大阶段序号流程（对应 flow.yaml）
 
 ```mermaid
 flowchart TD
-    %% ═══════════════════════════════════════════════════════════
-    %% STARTUP 阶段
-    %% ═══════════════════════════════════════════════════════════
-    subgraph STARTUP["■ 第一阶段：STARTUP — 启动阶段"]
-        direction TB
-        S0["Step 0: step_check_config
-            检查 embedded-debug-config.json"] --> S0C{"文件存在?"}
-        S0C -->|✅ 存在| S0F[read_config → configFound=true]
-        S0C -->|❌ 不存在| S0M["run_script:
-            config_reader.py --init
-            扫描工程 + 采集参数"]
-        S0M --> S0M2["update_state:
-            configFound=true
-            serialConfirmed=true"]
-        S0F --> S1
-        S0M2 --> S1
-
-        S1["Step 1: step_collect_params
-            type: ask_user"] --> S1T["AI 向用户提问:
-            ① 串口号变化?
-            ② 故障现象描述?"]
-        S1T --> S1B{"用户回答"}
-        S1B -->|串口变化| S1S["config_reader.py --set-port"]
-        S1B -->|有故障| S1F["update_state:
-            faultDescribed=true"]
-        S1B -->|全部确认| S1A["log_info: 继续执行"]
-        S1S --> S2
-        S1F --> S2
-        S1A --> S2
-
-        S2["Step 2: step_exit
-            type: exit_phase
-            → 进入 DEBUG_LOOP"]
+    subgraph STARTUP["■ STARTUP 阶段 (seq 1~3)"]
+        S1["seq1 step_check_config
+            action: check_file
+            检查 embedded-debug-config.json"]
+        S1 --> S1C{"存在?"}
+        S1C -->|✅| S1OK["on_success: read_config
+            → goto 2"]
+        S1C -->|❌| S1M["on_failure: config_reader --init
+            → goto 2"]
+        S1OK --> S2
+        S1M --> S2
+        S2["seq2 step_collect_params
+            action: ask_user
+            采集故障现象 + 确认工程配置"]
+        S2 --> S2D["AI 提问 → --ack success
+            → goto 3"]
+        S2D --> S3["seq3 step_to_debug
+            action: noop → goto 4"]
     end
+    S3 --> D4
 
-    %% ═══════════════════════════════════════════════════════════
-    %% 阶段连接
-    %% ═══════════════════════════════════════════════════════════
-    S2 --> D0
-
-    %% ═══════════════════════════════════════════════════════════
-    %% DEBUG_LOOP 阶段
-    %% ═══════════════════════════════════════════════════════════
-    subgraph DEBUG_LOOP["■ 第二阶段：DEBUG_LOOP — 调试循环（最多 8 轮）"]
-        direction TB
-
-        D0["Step 1: step_analyze
-            type: analyze_code
-            AI 分析日志 + 定位可疑代码"] --> D1
-        D1["Step 2: step_add_cheshi
-            type: edit_source
-            AI 插入 CHESHI 调试打印"] --> D2
-
-        D2["Step 3: step_compile
-            type: run_script
-            引擎自动执行 keil_build.py"] --> D2C{"编译结果?"}
-        D2C -->|✅ 成功| D2S["update_state:
-            lastBuildStatus=success"]
-        D2C -->|❌ 失败| D2F["update_state: failure
-            goto_step: step_add_cheshi 🔄"]
-        D2F --> D1
-        D2S --> D3
-
-        D3["Step 4: step_flash
-            type: run_script
-            引擎自动执行 keil_flash.py"] --> D3P{"precheck:
-            retryCount < 2?"}
-        D3P -->|❌ retryCount≥2| D3B["log_error
-            exit_phase → COMPLETED ⛔"]
-        D3P -->|✅ retryCount<2| D3PA["pre_action:
-            retryCount++"]
-        D3PA --> D3R["执行 keil_flash.py"]
-        D3R --> D3C{"下载结果?"}
-
-        D3C -->|✅ 成功| D3S["update_state:
-            lastFlashStatus=success
-            retryCount=0"]
-        D3C -->|❌ 失败| D3F1["update_state:
-            lastFlashStatus=failure"]
-        D3F1 --> D3AC{"assert:
-            retryCount≥2?"}
-        D3AC -->|✅ 已达2次| D3AE["log_error
-            exit_phase → COMPLETED"]
-        D3AC -->|❌ 未达2次| D3AG["goto_step: step_flash 🔄
-            自动重试下载"]
-        D3AG --> D3
-        D3S --> D4
-
-        D4["Step 5: step_capture_log
-            type: run_script
-            引擎执行 serial_monitor.py"] --> D4P{"precheck:
-            retryCount < 2?"}
-        D4P -->|❌ retryCount≥2| D4B["exit_phase → COMPLETED"]
-        D4P -->|✅ retryCount<2| D4PA["pre_action:
-            retryCount++"]
-        D4PA --> D4R["执行 serial_monitor.py
-            先启动监听
-            → 用户复位目标板"]
-        D4R --> D4C{"串口结果?"}
-        D4C -->|✅ 成功| D4S["retryCount=0"]
-        D4C -->|❌ 失败| D4F["检查 retryCount≥2?
-            → exit / goto_step retry 🔄"]
-        D4S --> D5
-
-        D5["Step 6: step_analyze_result
-            type: analyze_result
-            AI 分析日志是否定位根因"] --> D5C{"根因找到?"}
-
-        D5C -->|✅ 是| D5F["rootCauseFound=true
-            exit_phase → VERIFY_AND_REPORT"]
-
-        D5C -->|❌ 否| D5I{"迭代次数 < 8?"}
-        D5I -->|✅ 未达上限| D5R["iterationCount++
-            goto_step: step_add_cheshi 🔄"]
-        D5R --> D1
-
-        D5I -->|❌ 已达 8 轮| D5W["wait_user:
-            请用户提供排查思路"]
-        D5W --> D5
+    subgraph DEBUG_LOOP["■ DEBUG_LOOP 阶段 (seq 4~9)"]
+        D4["seq4 step_analyze
+            action: analyze (locate)"]
+        D4 --> D5["seq5 step_add_cheshi
+            action: edit_source (insert_cheshi)"]
+        D5 --> D6["seq6 step_compile
+            action: run_script (keil_build.py)"]
+        D6 --> D6C{"编译?"}
+        D6C -->|✅| D6S["goto 7"]
+        D6C -->|❌| D6F["goto 5 🔄"]
+        D6S --> D7["seq7 step_flash
+            action: run_script (keil_flash.py)
+            precheck: retryCount<2, buildMode==full"]
+        D7 --> D7C{"下载?"}
+        D7C -->|✅| D7S["retryCount=0 → goto 8"]
+        D7C -->|❌ retry<2| D7F["goto 7 🔄"]
+        D7C -->|❌ retry≥2| D7B["exit → COMPLETED ⛔"]
+        D7S --> D8["seq8 step_capture_log
+            action: run_script (serial_monitor.py)
+            precheck: retryCount<2"]
+        D8 --> D8C{"串口?"}
+        D8C -->|✅| D8S["retryCount=0 → goto 9"]
+        D8C -->|❌ retry<2| D8F["goto 8 🔄"]
+        D8C -->|❌ retry≥2| D8B["exit → COMPLETED ⛔"]
+        D8S --> D9["seq9 step_analyze_result
+            action: analyze (root_cause)"]
+        D9 --> D9C{"根因找到?"}
+        D9C -->|✅| D9F["goto 10"]
+        D9C -->|❌| D9I{"迭代<8?"}
+        D9I -->|✅| D9R["iterationCount++ → goto 5 🔄"]
+        D9I -->|❌| D9W["wait_user → --wake 回到 seq9"]
     end
+    D9F --> V10
 
-    %% ═══════════════════════════════════════════════════════════
-    %% 阶段连接
-    %% ═══════════════════════════════════════════════════════════
-    D5F --> V0
-
-    %% ═══════════════════════════════════════════════════════════
-    %% VERIFY_AND_REPORT 阶段
-    %% ═══════════════════════════════════════════════════════════
-    subgraph VERIFY["■ 第三阶段：VERIFY_AND_REPORT — 验证与报告"]
-        direction TB
-
-        V0["Step 1: step_clean_cheshi
-            type: edit_source
-            AI 删除所有 CHESHI 调试代码"] --> V1
-        V1["Step 2: step_fix_code
-            type: edit_source
-            AI 修改业务代码修复故障"] --> V2
-
-        V2["Step 3: step_verify
-            type: run_script
-            引擎执行 build_and_flash.py"] --> V2C{"验证结果?"}
-        V2C -->|✅ 成功| V2S["log_info: 故障已解决
-            serial_monitor.py 串口监听验证"]
-        V2C -->|❌ 失败| V2F["goto_step: step_analyze
-            gate: DEBUG_LOOP.yaml 🔄
-            返回调试循环重新分析"]
-        V2F --> D0
-        V2S --> V3
-
-        V3["Step 4: step_regression
-            type: check_regression
-            AI 全量回归验证"] --> V4
-
-        V4["Step 5: step_report
-            type: generate_report
-            AI 生成报告 .md
-            写记忆索引到 debug-history.yaml"] --> V5
-
-        V5["Step 6: step_complete
-            type: exit_phase
-            → COMPLETED ✅"]
+    subgraph VERIFY["■ VERIFY_AND_REPORT 阶段 (seq 10~16)"]
+        V10["seq10 step_clean_cheshi
+            action: edit_source (remove_cheshi)"]
+        V10 --> V11["seq11 step_fix_code
+            action: edit_source (fix_bug)"]
+        V11 --> V12["seq12 step_verify_build
+            action: run_script (keil_build.py)
+            precheck: buildMode!=none"]
+        V12 --> V12C{"验证?"}
+        V12C -->|✅| V12S["goto 13"]
+        V12C -->|❌| V12F["goto 4 🔄 退回调试"]
+        V12S --> V13["seq13 step_verify_flash
+            action: run_script (keil_flash.py)
+            precheck: buildMode==full"]
+        V13 --> V13C{"验证?"}
+        V13C -->|✅| V13S["goto 14"]
+        V13C -->|❌| V13F["goto 4 🔄 退回调试"]
+        V13S --> V14["seq14 step_regression
+            action: check_regression"]
+        V14 --> V15["seq15 step_report
+            action: report → goto 16"]
+        V15 --> V16["seq16 step_complete
+            action: exit → COMPLETED ✅"]
     end
 ```
 
@@ -221,12 +127,11 @@ flowchart TD
 ```mermaid
 stateDiagram-v2
     [*] --> STARTUP: --init
-    STARTUP --> DEBUG_LOOP: 参数采集完成
-    DEBUG_LOOP --> VERIFY_AND_REPORT: 找到根因
-    DEBUG_LOOP --> COMPLETED: 下载失败2次
-    DEBUG_LOOP --> COMPLETED: 串口失败2次
-    VERIFY_AND_REPORT --> DEBUG_LOOP: 验证失败（退回调试）
-    VERIFY_AND_REPORT --> COMPLETED: 全部验证通过
+    STARTUP --> DEBUG_LOOP: seq3 衔接 (goto 4)
+    DEBUG_LOOP --> VERIFY_AND_REPORT: seq9 找到根因 (goto 10)
+    DEBUG_LOOP --> COMPLETED: 下载失败2次 / 串口失败2次
+    VERIFY_AND_REPORT --> DEBUG_LOOP: 验证失败 (goto 4)
+    VERIFY_AND_REPORT --> COMPLETED: seq16 完成
 
     COMPLETED --> STARTUP: --reset（新任务）
     COMPLETED --> STARTUP: --init（新对话）

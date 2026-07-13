@@ -1,0 +1,35 @@
+{
+  "currentSeq": 1,
+  "currentPhase": null,
+  "completedPhases": [],
+  "lastUpdated": null,
+  "projectInfo": {
+    "configFound": false,
+    "serialConfirmed": false,
+    "hardwareReady": false,
+    "faultDescribed": false,
+    "configConfirmed": false,
+    "buildMode": "full"
+  },
+  "debugLoopInfo": {
+    "iterationCount": 0,
+    "cheshiAdded": false,
+    "lastBuildStatus": null,
+    "lastFlashStatus": null,
+    "rootCauseFound": false,
+    "retryCount": 0,
+    "suspiciousLocation": "",
+    "askUser": false,
+    "askCount": 0
+  },
+  "verifyReport": {
+    "cheshiCleaned": false
+  },
+  "debugSession": {
+    "startTime": null,
+    "endTime": null,
+    "faultSummary": "",
+    "reportFile": "",
+    "memorySaved": false
+  }
+}

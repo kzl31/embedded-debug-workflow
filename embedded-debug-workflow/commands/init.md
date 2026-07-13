@@ -1,6 +1,6 @@
-# /kzl csh / 初始化 — 初始化调试配置
+# /kzl 初始化 — 初始化调试配置
 
-> 此命令处理 `/kzl csh` / `/kzl 初始化` 和 `/kzl init`。
+> 此命令处理 `/kzl 初始化` / `/kzl 初始化` 和 `/kzl init`。
 > 参数 `$1` 为项目目录路径，为空则默认为当前工作目录。
 
 ---
@@ -10,7 +10,7 @@
 ### Step 1: 确认工作区目录
 
 ```yaml
-type: ask_user
+action: ask_user
 question: 要初始化的「工作区」目录是？（配置文件将生成在 {工作区}/.copilot/ 下）
 default: $PWD
 ```
@@ -21,8 +21,8 @@ default: $PWD
 ### Step 2: 运行 config_reader.py --init
 
 ```yaml
-type: run_script
-script: python "{skill_dir}/scripts/config_reader.py" --init "{project_dir}"
+action: run_script
+call: python "{skill_dir}/scripts/config_reader.py" --init "{project_dir}"
 说明: 自动扫描 Keil 工程 → 逐工程采集串口与下载器 → 在工作区 .copilot/ 生成配置
 ```
 
@@ -35,7 +35,7 @@ script: python "{skill_dir}/scripts/config_reader.py" --init "{project_dir}"
 ### Step 3: 验证配置生成
 
 ```yaml
-type: check_file
+action: check_file
 path: "{project_dir}/.copilot/embedded-debug-config.json"
 on_success: ✅ 配置已生成，可以开始调试
 on_failure: ⚠️ 配置未生成，请检查脚本输出

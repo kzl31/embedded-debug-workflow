@@ -1,45 +1,56 @@
 #!/usr/bin/env python
 """
-workflow_engine.py — 嵌入式调试工作流状态机引擎
+workflow_engine.py — 嵌入式调试工作流「单文件线性序号驱动」引擎
 
 核心理念：
-  YAML 门禁文件 = 唯一真相源（流程定义）
-  flow-gate.json  = 唯一状态源（进度追踪）
-  本引擎         = 纯解析器 + 分发器（零硬编码步骤）
+  flow.yaml      = 唯一真相源（线性序号步骤表，含 phase 分组标签）
+  flow-gate.json = 唯一状态源（当前 seq + 流程状态）
+  本引擎         = 纯查表 + 序号跳转解析器（零硬编码步骤）
 
 用法：
-  python workflow_engine.py --project <项目目录>
-      显示当前阶段/步骤状态，输出下一步指令（JSON）
+  python workflow_engine.py --project <项目目录> --init
+      新对话初始化：干净状态 + 阶段置 STARTUP(seq=1) + 生成配置
+
+  python workflow_engine.py --project <项目目录> --mode 0
+      只读当前状态快照（不执行、不推进）
+
+  python workflow_engine.py --project <项目目录> --mode 1
+      执行/推进当前步骤：
+        - 自动步骤（run_script/check_file/...）引擎直接执行并按结果跳转
+        - AI 步骤（ask_user/edit_source/analyze/report/...）输出指令，不推进
+
+  python workflow_engine.py --project <项目目录> --ack success
+  python workflow_engine.py --project <项目目录> --ack failure
+      AI 步骤执行完毕后提交结果，引擎据此走 on_success/on_failure 并继续
 
   python workflow_engine.py --project <项目目录> --done
-      标记当前步骤完成，自动推进到下一步
+      --ack success 的兼容别名
+
+  python workflow_engine.py --project <项目目录> --wake
+      从 wait_user（人工暂停）恢复，重新执行当前步骤
 
   python workflow_engine.py --project <项目目录> --reset
-      重置 flow-gate.json 为新任务
+      重置为新任务
 
-  python workflow_engine.py --project <项目目录> --jump <PHASE>
-      强制跳转到指定阶段
+  python workflow_engine.py --project <项目目录> --set KEY=VALUE
+      写入状态字段（点号语法，如 --set projectInfo.buildMode=full）
 
 依赖：pip install pyyaml
-
-扩展方式（无需改 Python 代码）：
-  1. registry.json 注册新阶段
-  2. gates/ 下创建对应的 .yaml 门禁文件
-  3. 引擎自动识别新阶段和步骤类型
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import base64
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-# ── 尝试导入 yaml ────────────────────────────────────────────────────
 try:
     import yaml
 except ImportError:
@@ -56,19 +67,17 @@ except ImportError:
 # ══════════════════════════════════════════════════════════════════════
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
-REGISTRY_PATH = SKILL_DIR / "registry.json"
-GATES_DIR = SKILL_DIR / "gates"
-SCRIPTS_DIR = SKILL_DIR / "scripts"
+FLOW_YAML_PATH = SKILL_DIR / "flow.yaml"
+TEMPLATES_DIR = SKILL_DIR / "templates"
+STATE_DIR = ".copilot/.54188"
 FLOW_GATE_FILENAME = "flow-gate.json"
 
-# 状态目录（固定）：<project_dir>/.copilot/.54188/flow-gate.json
-STATE_DIR = ".copilot/.54188"
+# 动作类型分类
+AUTO_TYPES = {"run_script", "check_file", "read_config", "noop", "exit", "update_state"}
+AI_TYPES = {"ask_user", "edit_source", "analyze", "report", "check_regression", "wait_user"}
 
-# 步骤类型 → 执行模式映射
-AUTO_EXEC_TYPES = {"run_script", "check_file", "read_config", "update_state",
-                   "log_info", "log_warning", "log_error", "exit_phase", "goto_step"}
-AI_JUDGMENT_TYPES = {"ask_user", "edit_source", "analyze_code", "analyze_result",
-                     "check_regression", "generate_report", "wait_user"}
+# 流向终止动作（执行后停止后续动作列表）
+TERMINATE_ACTIONS = {"goto", "exit", "wait_user"}
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -76,7 +85,6 @@ AI_JUDGMENT_TYPES = {"ask_user", "edit_source", "analyze_code", "analyze_result"
 # ══════════════════════════════════════════════════════════════════════
 
 def load_json(path: Path) -> dict:
-    """加载 JSON 文件，不存在则返回 {}"""
     if path.exists():
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -84,7 +92,6 @@ def load_json(path: Path) -> dict:
 
 
 def save_json(path: Path, data: dict) -> None:
-    """保存 JSON 文件，原子写入"""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     with open(tmp, "w", encoding="utf-8") as f:
@@ -93,45 +100,48 @@ def save_json(path: Path, data: dict) -> None:
 
 
 def load_yaml(path: Path) -> dict:
-    """加载 YAML 门禁文件"""
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
 def resolve_path(template: str, project_dir: str) -> str:
-    """替换路径模板中的变量"""
-    return template.replace("{project_dir}", project_dir)
+    return (template or "").replace("{project_dir}", project_dir)
 
 
 def now_iso() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _xor_bytes(data: bytes, key: bytes) -> bytes:
+    return bytes(d ^ key[i % len(key)] for i, d in enumerate(data))
+
+_ENCRYPT_KEY = b"CodexFlowGate"
+
+def _encrypt_json(data: dict) -> str:
+    text = json.dumps(data, ensure_ascii=False, indent=2)
+    return base64.b64encode(_xor_bytes(text.encode("utf-8"), _ENCRYPT_KEY)).decode("ascii")
+
+def _decrypt_json(encrypted: str) -> dict:
+    raw = base64.b64decode(encrypted.encode("ascii"))
+    return json.loads(_xor_bytes(raw, _ENCRYPT_KEY).decode("utf-8"))
+
 # ══════════════════════════════════════════════════════════════════════
 # 状态管理
 # ══════════════════════════════════════════════════════════════════════
 
 def get_flow_gate_path(project_dir: str) -> Path:
-    """状态文件路径：<project_dir>/.copilot/.54188/flow-gate.json
-
-    固定目录名，状态文件统一存放于 .copilot/.54188 下，便于定位。
-    """
     return Path(project_dir) / STATE_DIR / FLOW_GATE_FILENAME
 
 
 def load_flow_gate(project_dir: str) -> dict:
-    """加载 flow-gate.json，不存在则从模板创建"""
     path = get_flow_gate_path(project_dir)
     if path.exists():
-        return load_json(path)
-
-    # 从模板创建
-    template = SKILL_DIR / "templates" / "flow-gate.json"
+        return _decrypt_json(path.read_text(encoding="utf-8"))
+    template = TEMPLATES_DIR / FLOW_GATE_FILENAME
     if template.exists():
         data = load_json(template)
     else:
         data = _default_flow_gate()
-
     data["lastUpdated"] = now_iso()
     data["debugSession"]["startTime"] = now_iso()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -140,11 +150,6 @@ def load_flow_gate(project_dir: str) -> dict:
 
 
 def save_flow_gate(project_dir: str, data: dict, force: bool = False) -> None:
-    """保存 flow-gate.json，带手动修改保护。
-
-    如果文件已被外部（用户）手动修改（比内存中的 lastUpdated 更新），
-    除非 force=True，否则跳过保存并打印警告。
-    """
     fpath = get_flow_gate_path(project_dir)
     if fpath.exists() and not force:
         try:
@@ -152,31 +157,30 @@ def save_flow_gate(project_dir: str, data: dict, force: bool = False) -> None:
             disk_ts = on_disk.get("lastUpdated", "")
             mem_ts = data.get("lastUpdated", "")
             if disk_ts and disk_ts != mem_ts:
-                print(f"[workflow_engine] ⚠️ flow-gate.json 已被外部修改跳过保存"
+                print(f"[workflow_engine] ⚠️ flow-gate.json 已被外部修改，跳过保存"
                       f"（磁盘: {disk_ts} ≠ 内存: {mem_ts}）", file=sys.stderr)
-                print(f"[workflow_engine] 💡 如需覆盖请手动删除文件或设置 force=True",
-                      file=sys.stderr)
                 return
         except (json.JSONDecodeError, OSError):
-            pass  # 文件损坏或无法读取时仍继续保存
-
+            pass
     data["lastUpdated"] = now_iso()
-    save_json(fpath, data)
+    fpath.parent.mkdir(parents=True, exist_ok=True)
+    tmp = fpath.with_suffix(".tmp")
+    tmp.write_text(_encrypt_json(data), encoding="utf-8")
+    tmp.replace(fpath)
 
 
 def _default_flow_gate() -> dict:
     return {
+        "currentSeq": 1,
         "currentPhase": None,
         "completedPhases": [],
-        "currentGateFile": None,
-        "currentStepIndex": 0,
-        "currentStepId": None,
         "lastUpdated": None,
         "projectInfo": {
             "configFound": False,
             "serialConfirmed": False,
             "hardwareReady": False,
             "faultDescribed": False,
+            "configConfirmed": False,
             "buildMode": "full"
         },
         "debugLoopInfo": {
@@ -185,7 +189,10 @@ def _default_flow_gate() -> dict:
             "lastBuildStatus": None,
             "lastFlashStatus": None,
             "rootCauseFound": False,
-            "retryCount": 0
+            "retryCount": 0,
+            "suspiciousLocation": "",
+            "askUser": False,
+            "askCount": 0
         },
         "verifyReport": {
             "cheshiCleaned": False
@@ -201,113 +208,141 @@ def _default_flow_gate() -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════
-# 流程引擎核心
+# 引擎核心
 # ══════════════════════════════════════════════════════════════════════
 
 class WorkflowEngine:
-    """工作流状态机引擎"""
-
     def __init__(self, project_dir: str):
-        self.project_dir = project_dir
-        self.registry = load_json(REGISTRY_PATH)
-        self.fg = load_flow_gate(project_dir)
+        # 确保 Windows GBK 控制台下 emoji/中文打印不崩溃
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+            sys.stderr.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
 
-        # 确保必要字段存在
-        self.fg.setdefault("currentStepIndex", 0)
-        self.fg.setdefault("currentStepId", None)
-        self.fg["debugLoopInfo"].setdefault("retryCount", 0)
-        self.fg.setdefault("verifyReport", {"cheshiCleaned": False})
+        self.project_dir = os.path.abspath(project_dir)
+        if not os.path.isdir(self.project_dir):
+            raise FileNotFoundError(f"项目目录不存在: {self.project_dir}")
 
-        # 解析当前阶段
-        phase = self.fg.get("currentPhase") or "STARTUP"
-        if phase not in self.registry.get("phases", {}):
-            phase = "STARTUP"
+        # 加载流程定义（flow.yaml）
+        self.flow = load_yaml(FLOW_YAML_PATH)
+        self.steps = self.flow.get("steps", [])
+        self.meta = self.flow.get("meta", {})
+        self.phases = {p["name"]: p for p in self.flow.get("phases", [])}
 
-        self.current_phase = phase
-        phase_def = self.registry["phases"][phase]
-        self.current_gate_file = phase_def.get("gateFile")
+        # 状态
+        self.fg = load_flow_gate(self.project_dir)
+        self.currentSeq = self.fg.get("currentSeq", 1)
+        self.currentPhase = self.fg.get("currentPhase")
+        if not self.currentPhase and self.steps:
+            self.currentPhase = self.steps[0].get("phase")
 
-        # 加载门禁 YAML
-        self.gate_def = None
-        self.steps = []
-        if self.current_gate_file:
-            gate_path = SKILL_DIR / self.current_gate_file
-            if gate_path.exists():
-                self.gate_def = load_yaml(gate_path)
-                self.steps = self.gate_def.get("steps", [])
+        # 单步驱动的中间状态
+        self.next_seq: Optional[int] = None
+        self.finished: bool = False
+        self.waiting: bool = False
+        self.wait_msg: str = ""
 
-        self.step_index = self.fg.get("currentStepIndex", 0)
+        self.engine_bin = f'python "{Path(__file__).resolve()}"'
 
-    # ── 主入口 ────────────────────────────────────────────────────
+    # ── 基础查询 ────────────────────────────────────────────────
+
+    def _current_step(self) -> Optional[dict]:
+        if 1 <= self.currentSeq <= len(self.steps):
+            return self.steps[self.currentSeq - 1]
+        return None
+
+    def _seq_of_id(self, step_id: str) -> Optional[int]:
+        for s in self.steps:
+            if s.get("id") == step_id:
+                return s.get("seq")
+        return None
+
+    def _is_auto(self, step: dict) -> bool:
+        return step.get("action") in AUTO_TYPES
+
+    def _phase_forbidden(self, phase: str) -> list:
+        return self.phases.get(phase, {}).get("forbidden", [])
+
+    def _set_current_seq(self, seq: int) -> None:
+        seq = int(seq)
+        if 1 <= seq <= len(self.steps):
+            new_phase = self.steps[seq - 1].get("phase")
+            if self.currentPhase and new_phase and self.currentPhase != new_phase:
+                self._add_completed(self.currentPhase)
+            self.currentPhase = new_phase
+        self.currentSeq = seq
+        self.fg["currentSeq"] = seq
+        self.fg["currentPhase"] = self.currentPhase
+        save_flow_gate(self.project_dir, self.fg)
+
+    def _add_completed(self, phase: str) -> None:
+        if phase and phase not in self.fg.get("completedPhases", []):
+            self.fg.setdefault("completedPhases", []).append(phase)
+
+    # ── 主入口 ──────────────────────────────────────────────────
 
     def run(self) -> dict:
-        """执行当前步骤，返回结果 JSON"""
-        if not self.steps:
-            return self._result("completed", "所有步骤已完成",
-                                next_action="流程结束或使用 --reset 开始新任务")
+        """执行当前步骤（--mode 1）。自动步骤执行并链式推进，AI 步骤输出指令。"""
+        step = self._current_step()
+        if step is None:
+            return self._completed()
+        if self._is_auto(step):
+            self._execute_auto(step)
+            return self._drive()
+        return self._ai_instruction(step)
 
-        if self.step_index >= len(self.steps):
-            return self._handle_phase_end()
+    def ack(self, ok: bool) -> dict:
+        """AI 步骤提交结果（--ack success|failure / --done）。"""
+        step = self._current_step()
+        if step is None:
+            return self._completed()
+        if self._is_auto(step):
+            return self._result("error", "当前步骤为自动步骤，无需 --ack；请使用 --mode 1")
+        actions = step.get("on_success") if ok else step.get("on_failure")
+        self._run_actions(actions, default_next=True)
+        return self._drive()
 
-        step = self.steps[self.step_index]
-        self.fg["currentStepId"] = step.get("id", "")
-        save_flow_gate(self.project_dir, self.fg)
-
-        step_type = step.get("type", "unknown")
-        step_desc = step.get("description", step.get("id", "未知步骤"))
-
-        if step_type in AUTO_EXEC_TYPES:
-            return self._auto_execute(step)
-        else:
-            return self._ai_instruction(step)
-
-    def advance(self) -> dict:
-        """标记当前步骤完成，推进到下一步，返回新步骤的指令"""
-        self.step_index += 1
-        self.fg["currentStepIndex"] = self.step_index
-        save_flow_gate(self.project_dir, self.fg)
-
-        if self.step_index >= len(self.steps):
-            return self._handle_phase_end()
-
-        return self.run()
+    def wake(self) -> dict:
+        """从 wait_user 暂停恢复，重新执行当前步骤（--wake）。"""
+        self.waiting = False
+        self.wait_msg = ""
+        step = self._current_step()
+        if step is None:
+            return self._completed()
+        if self._is_auto(step):
+            self._execute_auto(step)
+            return self._drive()
+        return self._ai_instruction(step)
 
     def show_status(self) -> dict:
-        """只读当前状态快照，不执行任何步骤、不推进、不写文件。
-        供 AI 在不改变进度的情况下查看当前位置（--mode 0）。
-        """
+        """只读快照（--mode 0）。"""
+        step = self._current_step()
         total = len(self.steps)
-        step = None
-        if self.steps and 0 <= self.step_index < total:
-            step = self.steps[self.step_index]
-
         result = {
             "status": "state_read",
             "message": "当前状态快照（只读，未推进）",
-            "phase": self.current_phase,
-            "step_index": self.step_index,
-            "step_id": self.fg.get("currentStepId", "") or (step.get("id", "") if step else ""),
+            "seq": self.currentSeq,
+            "id": step.get("id", "") if step else "",
+            "phase": self.currentPhase,
             "total_steps": total,
-            "next_action": f'python workflow_engine.py --project "{self.project_dir}" --mode 1',
+            "next_action": f'{self.engine_bin} --project "{self.project_dir}" --mode 1',
         }
-
         if step:
-            stype = step.get("type", "")
-            result["current_step"] = {
-                "id": step.get("id", ""),
-                "type": stype,
-                "description": step.get("description", ""),
-            }
-            if stype in AI_JUDGMENT_TYPES:
+            atype = step.get("action")
+            if atype in AI_TYPES:
                 result["status"] = "awaiting_ai"
-                result["message"] = f"当前需 AI 执行: {step.get('description', '')}"
-            elif stype in AUTO_EXEC_TYPES:
+                result["message"] = f"当前需 AI 执行: {step.get('what', '')}"
+            else:
                 result["status"] = "auto_pending"
-                result["message"] = f"下一步将由引擎自动执行: {step.get('description', '')}"
-
-        # 附加关键状态字段，作为 AI 判据（AI 无需读取外部状态文件）
+                result["message"] = f"下一步由引擎自动执行: {step.get('what', '')}"
+            result["current_step"] = {
+                "seq": step.get("seq"), "id": step.get("id"),
+                "phase": step.get("phase"), "action": atype,
+                "what": step.get("what", ""),
+            }
         result["state"] = {
-            "currentPhase": self.fg.get("currentPhase"),
+            "currentPhase": self.currentPhase,
             "completedPhases": self.fg.get("completedPhases", []),
             "projectInfo": self.fg.get("projectInfo", {}),
             "debugLoopInfo": self.fg.get("debugLoopInfo", {}),
@@ -316,59 +351,25 @@ class WorkflowEngine:
         return result
 
     def reset(self) -> dict:
-        """重置 flow-gate.json"""
-        tmp = _default_flow_gate()
-        tmp["lastUpdated"] = now_iso()
-        tmp["debugSession"]["startTime"] = now_iso()
-        self.fg = tmp
-        save_flow_gate(self.project_dir, self.fg, force=True)
-        self.__init__(self.project_dir)
-        return self._result("reset", "已重置为新任务", phase="STARTUP",
-                            next_action=f"python workflow_engine.py --project \"{self.project_dir}\"")
+        return self.init(fresh=True)
 
-    def set_state(self, pairs: list) -> dict:
-        """通过 --set KEY=VALUE 写入状态字段（点号语法，如 projectInfo.buildMode=full）"""
-        applied = {}
-        for item in pairs:
-            if "=" not in item:
-                continue
-            key, value = item.split("=", 1)
-            self._apply_update_state({key: value})
-            applied[key] = value
-        return self._result("state_set", f"已更新状态: {applied}", applied=applied)
-
-    def jump(self, target_phase: str) -> dict:
-        """强制跳转到指定阶段"""
-        phases = self.registry.get("phases", {})
-        if target_phase not in phases:
-            return self._result("error", f"未知阶段: {target_phase}",
-                                available=list(phases.keys()))
-
-        phase_def = phases[target_phase]
-        self.fg["currentPhase"] = target_phase
-        self.fg["currentGateFile"] = phase_def.get("gateFile")
-        self.fg["currentStepIndex"] = 0
-        self.fg["currentStepId"] = None
-        save_flow_gate(self.project_dir, self.fg)
-        self.__init__(self.project_dir)
-        return self.run()
-
-    def init(self) -> dict:
-        """
-        显式初始化 — AI 在每次新对话开始时必须显式调用。
-        区别于 reset（重置已有任务），init 是全新开始。
-        初始化同时生成/确认调试配置文件 embedded-debug-config.json。
-        """
+    def init(self, fresh: bool = False) -> dict:
+        """初始化 / 重置流程。同时生成调试配置（幂等）。"""
         data = _default_flow_gate()
-        data["currentPhase"] = "STARTUP"
-        data["currentGateFile"] = "gates/STARTUP.yaml"
+        data["currentSeq"] = 1
+        data["currentPhase"] = self.steps[0].get("phase") if self.steps else None
         data["lastUpdated"] = now_iso()
         data["debugSession"]["startTime"] = now_iso()
         save_flow_gate(self.project_dir, data, force=True)
+        self.fg = data
+        self.currentSeq = 1
+        self.currentPhase = data["currentPhase"]
+        self.next_seq = None
+        self.finished = False
+        self.waiting = False
 
-        # 初始化时同步生成调试配置文件（已存在则跳过，保持幂等）
+        # 生成调试配置（已存在则跳过）
         try:
-            # 确保子模块（config_reader）输出 emoji 时不因 GBK 控制台崩溃
             try:
                 sys.stdout.reconfigure(encoding="utf-8")
                 sys.stderr.reconfigure(encoding="utf-8")
@@ -384,15 +385,26 @@ class WorkflowEngine:
         except Exception as exc:
             print(f"[init] ⚠️ 配置文件初始化失败: {exc}", file=sys.stderr)
 
-        self.__init__(self.project_dir)
+        # 预创建日志与报告目录：UV4 / 串口脚本不会自动创建目录，
+        # 若目录不存在会直接报"创建文件失败"，导致编译/监听日志无法落盘。
+        try:
+            copilot_dir = Path(self.project_dir) / ".copilot"
+            logs_dir = copilot_dir / "logs"
+            report_dir = copilot_dir / "报告"
+            os.makedirs(logs_dir, exist_ok=True)
+            os.makedirs(report_dir, exist_ok=True)
+            print(f"[init] 📁 已预创建目录: {logs_dir}")
+            print(f"[init] 📁 已预创建目录: {report_dir}")
+        except Exception as exc:
+            print(f"[init] ⚠️ 日志/报告目录创建失败: {exc}", file=sys.stderr)
+
         return self._result("initialized",
             f"✅ 调试工作流已初始化（项目: {self.project_dir}）",
-            phase="STARTUP",
-            step_index=0,
-            next_action=f"python workflow_engine.py --project \"{self.project_dir}\"")
+            seq=1, phase=self.currentPhase,
+            next_action=f'{self.engine_bin} --project "{self.project_dir}" --mode 1')
 
     def set_state(self, pairs: list) -> dict:
-        """通过 --set KEY=VALUE 写入状态字段（点号语法，如 projectInfo.buildMode=full）"""
+        """写入状态字段（--set KEY=VALUE，点号语法）。"""
         applied = {}
         for item in pairs:
             if "=" not in item:
@@ -402,400 +414,283 @@ class WorkflowEngine:
             applied[key] = value
         return self._result("state_set", f"已更新状态: {applied}", applied=applied)
 
-    # ── 步骤分发 ──────────────────────────────────────────────────
+    # ── 驱动循环 ────────────────────────────────────────────────
 
-    def _auto_execute(self, step: dict) -> dict:
-        """自动执行步骤（编译/下载/状态更新等）"""
-        step_type = step.get("type")
-        step_id = step.get("id", "")
-        step_desc = step.get("description", step_id)
+    def _drive(self) -> dict:
+        """根据 next_seq / finished / waiting 链式推进，直到遇到 AI 步骤或完成。"""
+        guard = 0
+        while True:
+            guard += 1
+            if guard > 300:
+                return self._result("error", "驱动循环次数过多，可能存在跳转死循环")
 
-        handlers = {
-            "run_script": self._handle_run_script,
-            "check_file": self._handle_check_file,
-            "read_config": self._handle_read_config,
-            "update_state": self._handle_update_state,
-            "log_info": self._handle_log,
-            "log_warning": self._handle_log,
-            "log_error": self._handle_log,
-            "exit_phase": self._handle_exit_phase,
-            "goto_step": self._handle_goto_step,
-            "assert": self._handle_assert,
-        }
+            if self.finished:
+                return self._completed()
+            if self.waiting:
+                return self._waiting()
 
-        handler = handlers.get(step_type)
-        if handler:
-            result = handler(step)
-            # run_script 已在 handler 内自行实时打印脚本输出；
-            # 其余自动步骤在此把结果打印到命令行，让 AI 直接可见
-            if step_type != "run_script":
-                print(f"[auto:{step_id}] {result.get('message', '')}", file=sys.stdout)
-            if result.get("auto_advance", True):
-                return self.advance()
-            return result
+            if self.next_seq is None:
+                self.next_seq = self.currentSeq + 1
+            if self.next_seq < 1 or self.next_seq > len(self.steps):
+                self.finished = True
+                return self._completed()
 
-        return self._result("error", f"未知自动步骤类型: {step_type}")
+            self._set_current_seq(self.next_seq)
+            step = self.steps[self.currentSeq - 1]
+            if self._is_auto(step):
+                self._execute_auto(step)
+                continue
+            return self._ai_instruction(step)
 
-    def _ai_instruction(self, step: dict) -> dict:
-        """AI 需要执行的步骤，输出指令"""
-        step_type = step.get("type")
-        step_id = step.get("id", "")
-        step_desc = step.get("description", step_id)
+    # ── 自动步骤执行 ────────────────────────────────────────────
 
-        base = self._result("awaiting_ai", step_desc,
-                            step_type=step_type,
-                            step_id=step_id,
-                            details=step)
+    def _execute_auto(self, step: dict) -> None:
+        action = step.get("action")
 
-        if step_type == "ask_user":
-            base["template"] = step.get("template", "")
-            base["branches"] = step.get("branches", {})
-            base["note"] = step.get("note", "")
-        elif step_type == "analyze_code":
-            base["inputs"] = step.get("inputs", [])
-            base["output"] = step.get("output", {})
-        elif step_type == "edit_source":
-            base["action"] = step.get("action", "")
-            base["macro_ref"] = step.get("macro_ref", "")
-            base["compile_verify"] = step.get("compile_verify", False)
-        elif step_type == "analyze_result":
-            base["iteration_ref"] = step.get("iteration_ref", "")
-            base["max_iterations"] = step.get("max_iterations", 8)
-        elif step_type == "check_regression":
-            base["checklist"] = step.get("checklist", [])
-        elif step_type == "generate_report":
-            base["report_template"] = step.get("report_template", "")
-            base["report_path"] = step.get("report_path", "")
-            base["report_fields"] = step.get("report_fields", [])
-            base["memory_entry"] = step.get("memory_entry", {})
-        elif step_type == "wait_user":
-            base["message"] = step.get("message", "")
+        # 1) 前置断言
+        for pc in step.get("precheck", []) or []:
+            cond = pc.get("assert")
+            if not self._eval_condition(cond):
+                self._run_actions(pc.get("on_fail", []), default_next=False)
+                if self.next_seq is None and not self.finished and not self.waiting:
+                    self.next_seq = self.currentSeq  # 断言失败且无跳转则停留
+                return
 
-        return base
+        # 2) 执行前动作
+        self._run_actions(step.get("pre_action", []), default_next=False)
 
-    # ── 具体处理器 ────────────────────────────────────────────────
+        # 3) 执行主动作
+        if action == "run_script":
+            success = self._exec_subprocess(step.get("call", ""))
+        elif action == "check_file":
+            success = self._check_file(step.get("params", {}))
+        elif action == "read_config":
+            success = True
+        elif action == "noop":
+            success = True
+        elif action == "exit":
+            self._do_exit("COMPLETED")
+            success = True
+        else:
+            success = True
 
-    def _resolve_script_file(self, cmd_str: str) -> str | None:
-        """从命令字符串中提取脚本文件路径，解析为绝对路径。"""
-        # 匹配 python /path/to/script.py 或 python scripts/name.py
-        import re
-        m = re.search(r'python\s+["\']?([^\s"\']+\.py)["\']?', cmd_str, re.IGNORECASE)
-        if m:
-            script_rel = m.group(1)
-            candidate = SKILL_DIR / script_rel
-            if candidate.exists():
-                return str(candidate)
-            # 如果是相对路径且 skill 目录找不到，尝试当作绝对路径
-            abs_candidate = Path(script_rel)
-            if abs_candidate.is_absolute() and abs_candidate.exists():
-                return str(abs_candidate)
+        # 4) 走结果分支
+        branch = step.get("on_success") if success else step.get("on_failure")
+        self._run_actions(branch, default_next=True)
+
+    # ── 动作列表执行 ────────────────────────────────────────────
+
+    def _run_actions(self, actions: list, default_next: bool = True) -> None:
+        for act in (actions or []):
+            if self._run_action(act) == "terminate":
+                return
+        if default_next and self.next_seq is None and not self.finished and not self.waiting:
+            self.next_seq = self.currentSeq + 1
+
+    def _run_action(self, action: Any) -> Optional[str]:
+        if not isinstance(action, dict):
+            return None
+
+        # 条件动作（when / then / else 同级）
+        if "when" in action:
+            if self._eval_condition(action.get("when")):
+                self._run_actions(action.get("then", []), default_next=False)
+            else:
+                self._run_actions(action.get("else", []), default_next=False)
+            return "terminate"
+
+        for atype, aval in action.items():
+            if atype == "update_state":
+                self._apply_update_state(aval)
+            elif atype == "run_script":
+                self._exec_subprocess(aval)
+            elif atype == "log":
+                self._do_log(aval)
+            elif atype == "read_config":
+                pass
+            elif atype == "goto":
+                self._set_next(aval)
+                return "terminate"
+            elif atype == "exit":
+                self._do_exit(aval)
+                return "terminate"
+            elif atype == "wait_user":
+                self._do_wait(aval)
+                return "terminate"
+            elif atype in ("edit_source", "analyze", "report", "ask_user"):
+                # 一般不出现在 do 列表，忽略
+                pass
         return None
 
-    def _handle_run_script(self, step: dict) -> dict:
-        """执行脚本 — 输出实时进入命令行，AI 可直接读取"""
-        script_template = step.get("script", "")
-        script_path = resolve_path(script_template, self.project_dir)
-        wait = step.get("wait", True)
-        desc = step.get("description", script_path)
-        step_id = step.get("id", "")
+    def _set_next(self, val: Any) -> None:
+        if val == "next":
+            self.next_seq = self.currentSeq + 1
+        elif val == "done":
+            self.finished = True
+        elif val == "wait":
+            self.waiting = True
+            self.next_seq = self.currentSeq
+        elif isinstance(val, int):
+            self.next_seq = val
+        elif isinstance(val, str):
+            seq = self._seq_of_id(val)
+            if seq:
+                self.next_seq = seq
 
-        # ⛔ 预检：确认脚本文件存在
-        script_file = self._resolve_script_file(script_path)
+    def _do_exit(self, phase: str) -> None:
+        self._add_completed(self.currentPhase)
+        self.currentPhase = phase
+        self.finished = True
+
+    def _do_wait(self, msg: str) -> None:
+        self.waiting = True
+        self.wait_msg = msg or ""
+        self.next_seq = self.currentSeq
+
+    def _do_log(self, aval: Any) -> None:
+        if isinstance(aval, dict):
+            level = aval.get("level", "info")
+            msg = aval.get("msg", "")
+        else:
+            level = "info"
+            msg = str(aval)
+        emoji = {"info": "ℹ", "warning": "⚠", "error": "❌"}.get(level, "ℹ")
+        print(f"[{level}] {emoji} {msg}", file=sys.stdout)
+
+    # ── 具体执行器 ──────────────────────────────────────────────
+
+    def _resolve_script_file(self, cmd_str: str) -> Optional[str]:
+        m = re.search(r'python\s+["\']?([^\s"\']+\.py)["\']?', cmd_str, re.IGNORECASE)
+        if not m:
+            return None
+        script_rel = m.group(1)
+        candidate = SKILL_DIR / script_rel
+        if candidate.exists():
+            return str(candidate)
+        abs_candidate = Path(script_rel)
+        if abs_candidate.is_absolute() and abs_candidate.exists():
+            return str(abs_candidate)
+        return None
+
+    def _exec_subprocess(self, cmd_template: str) -> bool:
+        cmd = resolve_path(cmd_template, self.project_dir)
+        script_file = self._resolve_script_file(cmd)
         if script_file is None:
-            err_msg = f"脚本文件不存在: 从命令中提取的 .py 文件未找到（SKILL_DIR={SKILL_DIR})"
-            print(f"[auto:{step_id}] ❌ {err_msg}\n命令: {script_path}", file=sys.stderr)
-            return self._result("script_missing", err_msg,
-                                auto_advance=False,
-                                command=script_path)
-
-        # 执行前检查
-        precheck = step.get("precheck")
-        if precheck:
-            for _pc in precheck:
-                pc_result = self._handle_assert({"type": "assert", **_pc})
-                if pc_result.get("status") == "blocked":
-                    print(f"[auto:{step_id}] ⛔ 前置检查未通过，跳过执行", file=sys.stdout)
-                    return {**pc_result, "auto_advance": False}
-
-        # 更新重试计数
-        pre_action = step.get("pre_action", [])
-        for pa in pre_action:
-            if pa.get("type") == "update_state":
-                self._apply_update_state(pa.get("fields", {}))
-
-        # 实时打印将要执行的命令，让 AI 在命令行直接看到
-        print(f"[auto:{step_id}] 🚀 执行: {script_path}", file=sys.stdout)
-
+            print(f"[exec] ❌ 脚本文件不存在: {cmd}", file=sys.stderr)
+            return False
+        print(f"[exec] 🚀 {cmd}", file=sys.stdout)
         try:
             child_env = os.environ.copy()
             child_env["PYTHONIOENCODING"] = "utf-8"
-            # 直接继承 stdout/stderr：脚本输出实时进入命令行，AI 可直接读取
-            # stdin=DEVNULL 避免子脚本等待输入而无限挂起（进程堆积/卡死）
-            result = subprocess.run(
-                script_path, shell=True,
-                cwd=str(SKILL_DIR), timeout=120, env=child_env,
-                stdin=subprocess.DEVNULL
-            )
-            success = result.returncode == 0
-
-            if success:
-                print(f"[auto:{step_id}] ✅ {desc} 成功 (exit={result.returncode})",
-                      file=sys.stdout)
-                for action in step.get("on_success", []):
-                    act_result = self._apply_action(action)
-                    if act_result and act_result.get("auto_advance") == False:
-                        return act_result  # 终止性 action（exit_phase/goto_step）
-                return self._result("auto_executed",
-                    f"{desc} — ✅ 成功",
-                    exit_code=result.returncode)
-            else:
-                print(f"[auto:{step_id}] ❌ {desc} 失败 (exit={result.returncode})",
-                      file=sys.stderr)
-                for action in step.get("on_failure", []):
-                    act_result = self._apply_action(action)
-                    if act_result and act_result.get("auto_advance") == False:
-                        act_result["script_error"] = f"{desc} — ❌ 失败"
-                        return act_result  # 终止性 action（exit_phase/goto_step/blocked）
-                # ⛔ 脚本失败后默认不自动推进
-                return self._result("auto_executed",
-                    f"{desc} — ❌ 失败",
-                    auto_advance=False,
-                    exit_code=result.returncode)
-
+            result = subprocess.run(cmd, shell=True, cwd=str(SKILL_DIR),
+                                    timeout=120, env=child_env,
+                                    stdin=subprocess.DEVNULL)
+            ok = result.returncode == 0
+            print(f"[exec] {'✅' if ok else '❌'} 退出码 {result.returncode}", file=sys.stdout)
+            return ok
         except subprocess.TimeoutExpired:
-            print(f"[auto:{step_id}] ⏱ 超时", file=sys.stderr)
-            return self._result("auto_executed", f"{desc} — ⏱ 超时", exit_code=-1)
+            print("[exec] ⏱ 超时", file=sys.stderr)
+            return False
         except Exception as e:
-            print(f"[auto:{step_id}] ❌ 异常: {e}", file=sys.stderr)
-            return self._result("auto_executed", f"{desc} — ❌ 异常: {e}", exit_code=-1)
+            print(f"[exec] ❌ 异常: {e}", file=sys.stderr)
+            return False
 
-    def _handle_check_file(self, step: dict) -> dict:
-        """检查文件是否存在"""
-        target = step.get("target", "")
+    def _check_file(self, params: dict) -> bool:
+        target = params.get("target", "")
         search_paths = [resolve_path(p, self.project_dir)
-                       for p in step.get("search_paths", ["{project_dir}"])]
-
-        found = False
-        found_path = None
+                        for p in params.get("search_paths", ["{project_dir}"])]
         for sp in search_paths:
-            candidate = Path(sp) / target
-            if candidate.exists():
-                found = True
-                found_path = str(candidate)
-                break
+            if (Path(sp) / target).exists():
+                print(f"[check_file] ✅ 找到 {target} @ {sp}", file=sys.stdout)
+                return True
+        print(f"[check_file] ⚠ 未找到 {target}", file=sys.stdout)
+        return False
 
-        if found:
-            for action in step.get("found", []):
-                self._apply_action(action)
-            return self._result("auto_executed", f"✅ 找到 {target}", path=found_path)
-        else:
-            for action in step.get("missing", []):
-                self._apply_action(action)
-            return self._result("auto_executed", f"⚠ 未找到 {target}，已触发缺失处理",
-                                searched=search_paths)
+    # ── AI 步骤指令 ─────────────────────────────────────────────
 
-    def _handle_read_config(self, step: dict) -> dict:
-        """读取配置文件（标记已读，实际由 AI 在后续步骤中读取）"""
-        return self._result("auto_executed", "配置文件已标记为已读取")
+    def _ai_instruction(self, step: dict) -> dict:
+        result = self._result("awaiting_ai", step.get("what", ""),
+                              seq=step.get("seq"), id=step.get("id"),
+                              phase=step.get("phase"), action=step.get("action"),
+                              what=step.get("what"),
+                              params=step.get("params", {}),
+                              forbidden=self._phase_forbidden(step.get("phase")))
+        result["next_action"] = (
+            f'{self.engine_bin} --project "{self.project_dir}" --ack success'
+            f'   （若未达成目标用 --ack failure）')
+        return result
 
-    def _handle_update_state(self, step: dict) -> dict:
-        """更新 flow-gate.json 字段"""
-        self._apply_update_state(step.get("fields", {}))
-        return self._result("auto_executed", "状态已更新")
+    # ── 终止状态 ────────────────────────────────────────────────
 
-    def _handle_log(self, step: dict) -> dict:
-        """日志输出"""
-        level = step.get("type", "log_info")
-        msg = step.get("message", "")
-        emoji = {"log_info": "ℹ", "log_warning": "⚠", "log_error": "❌"}.get(level, "ℹ")
-        return self._result("auto_executed", f"{emoji} {msg}")
+    def _waiting(self) -> dict:
+        return self._result("awaiting_user", self.wait_msg or "等待用户处理",
+                            seq=self.currentSeq, phase=self.currentPhase,
+                            next_action=f'{self.engine_bin} --project "{self.project_dir}" --wake')
 
-    def _handle_exit_phase(self, step: dict) -> dict:
-        """退出当前阶段，进入下一阶段"""
-        next_phase = step.get("next_phase", "COMPLETED")
-        print(f"[auto] 阶段切换 → {next_phase}", file=sys.stdout)
-        update = step.get("update_state", {})
-
-        # 处理 completedPhases 的 "+" 追加语法
-        if "completedPhases" in update and isinstance(update["completedPhases"], list):
-            for item in update["completedPhases"]:
-                if isinstance(item, str) and item.startswith("+"):
-                    phase_name = item[1:]
-                    if phase_name not in self.fg.get("completedPhases", []):
-                        self.fg.setdefault("completedPhases", []).append(phase_name)
-            del update["completedPhases"]
-
-        self._apply_update_state(update)
-
-        # 阶段转换
-        phases = self.registry.get("phases", {})
-        if next_phase in phases:
-            phase_def = phases[next_phase]
-            self.fg["currentPhase"] = next_phase
-            self.fg["currentGateFile"] = phase_def.get("gateFile")
-            self.fg["currentStepIndex"] = 0
-            self.fg["currentStepId"] = None
-        else:
-            self.fg["currentPhase"] = next_phase
-            self.fg["currentGateFile"] = None
-            self.fg["currentStepIndex"] = 0
-            self.fg["currentStepId"] = None
-
-        if next_phase == "COMPLETED":
+    def _completed(self) -> dict:
+        self.fg["currentPhase"] = "COMPLETED"
+        self.fg.setdefault("completedPhases", [])
+        if "VERIFY_AND_REPORT" not in self.fg["completedPhases"]:
+            self.fg["completedPhases"].append("VERIFY_AND_REPORT")
+        if not self.fg.get("debugSession", {}).get("endTime"):
             self.fg["debugSession"]["endTime"] = now_iso()
-
         save_flow_gate(self.project_dir, self.fg)
+        return self._result("completed", "🎉 所有流程已完成",
+                            next_action=f'{self.engine_bin} --project "{self.project_dir}" --reset')
 
-        # 重新同步内存状态（current_phase / step 列表等），
-        # 否则 self.current_phase 仍是旧阶段，导致返回 JSON 的 phase 字段与
-        # 已存盘的 currentPhase 矛盾（如误报 VERIFY_AND_REPORT 而非 COMPLETED）
-        self.__init__(self.project_dir)
+    # ── 条件与状态工具 ──────────────────────────────────────────
 
-        # ⛔ 不自动推进：让 AI 重新调用引擎查看新阶段的第一步
-        return self._result("phase_changed",
-            f"阶段切换: → {next_phase}",
-            next_phase=next_phase,
-            auto_advance=False,
-            next_action=f"python workflow_engine.py --project \"{self.project_dir}\"")
+    def _get_path(self, path: str) -> Any:
+        parts = path.split(".")
+        cur: Any = self.fg
+        for p in parts:
+            if isinstance(cur, dict) and p in cur:
+                cur = cur[p]
+            else:
+                return ""
+        return cur
 
-    def set_state(self, pairs: list) -> dict:
-        """通过 --set KEY=VALUE 写入状态字段（点号语法，如 projectInfo.buildMode=full）"""
-        applied = {}
-        for item in pairs:
-            if "=" not in item:
-                continue
-            key, value = item.split("=", 1)
-            self._apply_update_state({key: value})
-            applied[key] = value
-        return self._result("state_set", f"已更新状态: {applied}", applied=applied)
+    def _eval_condition(self, cond: str) -> bool:
+        cond = (cond or "").strip()
+        if not cond:
+            return True
+        m = re.match(r'^([\w.]+)\s*(==|!=|<=|>=|<|>)\s*(.+)$', cond)
+        if not m:
+            return True
+        path, op, raw = m.group(1), m.group(2), m.group(3).strip()
+        raw_val = raw.strip('"').strip("'")
+        actual = self._get_path(path)
+        try:
+            a = float(actual)
+            b = float(raw_val)
+            return self._cmp(op, a, b)
+        except (ValueError, TypeError):
+            pass
+        return self._cmp(op, str(actual), raw_val)
 
-    def _handle_goto_step(self, step: dict) -> dict:
-        """跳转到指定步骤"""
-        target_step = step.get("step", "")
-        print(f"[auto] 跳转 → {target_step}", file=sys.stdout)
-        target_gate = step.get("gate")
-
-        if target_gate:
-            # 跨门禁跳转
-            self.fg["currentGateFile"] = target_gate
-            phases = self.registry.get("phases", {})
-            for pname, pdef in phases.items():
-                if pdef.get("gateFile") == target_gate:
-                    self.fg["currentPhase"] = pname
-                    break
-
-        # 在当前门禁中查找步骤索引
-        for i, s in enumerate(self.steps):
-            if s.get("id") == target_step:
-                self.fg["currentStepIndex"] = i
-                self.fg["currentStepId"] = target_step
-                break
-
-        save_flow_gate(self.project_dir, self.fg)
-        self.__init__(self.project_dir)
-        return self._result("goto_step", f"跳转到: {target_step}",
-                            auto_advance=False,
-                            next_action=f"python workflow_engine.py --project \"{self.project_dir}\"")
-
-    def set_state(self, pairs: list) -> dict:
-        """通过 --set KEY=VALUE 写入状态字段（点号语法，如 projectInfo.buildMode=full）"""
-        applied = {}
-        for item in pairs:
-            if "=" not in item:
-                continue
-            key, value = item.split("=", 1)
-            self._apply_update_state({key: value})
-            applied[key] = value
-        return self._result("state_set", f"已更新状态: {applied}", applied=applied)
-
-    def _handle_assert(self, step: dict) -> dict:
-        """断言检查 — 同时处理 on_success 和 on_fail"""
-        condition = step.get("condition", "")
-        passed = self._eval_condition(condition)
-
-        if passed:
-            # 条件满足 → 执行 on_success（如 "retryCount>=2 → 退出流程"）
-            for action in step.get("on_success", []):
-                self._apply_action(action)
-            return {"status": "passed", "auto_advance": True}
-        else:
-            # 条件不满足 → 执行 on_fail（如 "retryCount<2 → 阻止继续"）
-            for action in step.get("on_fail", []):
-                self._apply_action(action)
-            if step.get("on_fail"):
-                return {"status": "blocked", "message": f"断言失败: {condition}",
-                        "auto_advance": False}
-            return {"status": "passed", "auto_advance": True}
-
-    # ── 辅助方法 ──────────────────────────────────────────────────
-
-    def _handle_phase_end(self) -> dict:
-        """当前阶段所有步骤完成"""
-        phase_def = self.registry.get("phases", {}).get(self.current_phase, {})
-        next_phase = phase_def.get("nextPhase")
-
-        if next_phase:
-            # 自动转换阶段
-            next_def = self.registry["phases"].get(next_phase, {})
-            self.fg["currentPhase"] = next_phase
-            self.fg["currentGateFile"] = next_def.get("gateFile")
-            self.fg["currentStepIndex"] = 0
-            self.fg["currentStepId"] = None
-            completed = self.fg.get("completedPhases", [])
-            if self.current_phase not in completed:
-                completed.append(self.current_phase)
-            self.fg["completedPhases"] = completed
-            save_flow_gate(self.project_dir, self.fg)
-            self.__init__(self.project_dir)
-            return self._result("phase_completed",
-                f"阶段 {self.current_phase} 完成，自动进入 {next_phase}",
-                next_phase=next_phase,
-                auto_advance=False,
-                next_action=f"python workflow_engine.py --project \"{self.project_dir}\"")
-
-    def set_state(self, pairs: list) -> dict:
-        """通过 --set KEY=VALUE 写入状态字段（点号语法，如 projectInfo.buildMode=full）"""
-        applied = {}
-        for item in pairs:
-            if "=" not in item:
-                continue
-            key, value = item.split("=", 1)
-            self._apply_update_state({key: value})
-            applied[key] = value
-        return self._result("state_set", f"已更新状态: {applied}", applied=applied)
-
-        return self._result("all_completed", "所有阶段已完成 ✅",
-                            auto_advance=False,
-                            next_action="使用 --reset 开始新任务")
-
-    def _apply_action(self, action: dict) -> Optional[dict]:
-        """执行单个 action"""
-        atype = action.get("type")
-        if atype == "update_state":
-            self._apply_update_state(action.get("fields", {}))
-        elif atype == "run_script":
-            return self._handle_run_script(action)
-        elif atype == "goto_step":
-            return self._handle_goto_step(action)
-        elif atype == "exit_phase":
-            return self._handle_exit_phase(action)
-        elif atype in ("log_info", "log_warning", "log_error"):
-            return self._handle_log(action)
-        elif atype == "assert":
-            return self._handle_assert(action)
-        elif atype == "wait_user":
-            return {"status": "blocked", "message": action.get("message", ""),
-                    "auto_advance": False}
-        return None
+    @staticmethod
+    def _cmp(op: str, a: Any, b: Any) -> bool:
+        if op == "==":
+            return a == b
+        if op == "!=":
+            return a != b
+        if op == "<":
+            return a < b
+        if op == ">":
+            return a > b
+        if op == "<=":
+            return a <= b
+        if op == ">=":
+            return a >= b
+        return True
 
     def _apply_update_state(self, fields: dict) -> None:
-        """将 fields 字典合并到 flow-gate.json（支持点号语法如 projectInfo.configFound）"""
-        for key, value in fields.items():
+        for key, value in (fields or {}).items():
+            if key == "{now}":
+                self._apply_update_state({"debugSession.endTime": now_iso()})
+                continue
             if "." in key:
-                # 点号语法：projectInfo.configFound → fg["projectInfo"]["configFound"]
-                parts = key.split(".", 1)
-                section = parts[0]
-                field = parts[1]
+                section, field = key.split(".", 1)
                 if section in self.fg and isinstance(self.fg[section], dict):
                     if isinstance(value, str) and value == "+1":
                         self.fg[section][field] = self.fg[section].get(field, 0) + 1
@@ -811,53 +706,15 @@ class WorkflowEngine:
                 self.fg[key] = value
         save_flow_gate(self.project_dir, self.fg)
 
-    def _eval_condition(self, condition: str) -> bool:
-        """简单条件求值（仅支持 retryCount < N 模式）"""
-        if not condition:
-            return True
-        # 解析 "flow-gate.json / debugLoopInfo / retryCount < 2"
-        parts = condition.replace("flow-gate.json / ", "").split(" / ")
-        if len(parts) >= 2:
-            section = parts[0].strip()
-            field_op = parts[-1].strip()
-            import re
-            # 字符串比较: projectInfo / buildMode == "full"
-            m_str = re.match(r'(\w+)\s*(==|!=)\s*"?([\w]+)"?', field_op)
-            if m_str:
-                fname = m_str.group(1)
-                op = m_str.group(2)
-                expected = m_str.group(3)
-                actual = self.fg.get(section, {}).get(fname, "")
-                if op == "==":
-                    return str(actual) == expected
-                elif op == "!=":
-                    return str(actual) != expected
-            # 数值比较: debugLoopInfo / retryCount < 2
-            m = re.match(r'(\w+)\s*([<>=!]+)\s*(\d+)', field_op)
-            if m:
-                fname = m.group(1)
-                op = m.group(2)
-                threshold = int(m.group(3))
-                actual = self.fg.get(section, {}).get(fname, 0)
-                if op == "<":
-                    return actual < threshold
-                elif op == ">=":
-                    return actual >= threshold
-                elif op == "==":
-                    return actual == threshold
-        return True
-
     def _result(self, status: str, message: str, **kwargs) -> dict:
-        """构建标准输出 JSON"""
         result = {
             "status": status,
-            "phase": self.current_phase,
-            "step_index": self.step_index,
-            "step_id": self.fg.get("currentStepId", ""),
+            "seq": self.currentSeq,
+            "phase": self.currentPhase,
             "total_steps": len(self.steps),
             "message": message,
             "next_action": kwargs.pop("next_action",
-                f"python workflow_engine.py --project \"{self.project_dir}\" --done")
+                f'{self.engine_bin} --project "{self.project_dir}" --mode 1'),
         }
         result.update(kwargs)
         return result
@@ -868,7 +725,6 @@ class WorkflowEngine:
 # ══════════════════════════════════════════════════════════════════════
 
 def main():
-    # 修复 Windows 控制台 GBK 编码导致的 emoji/中文输出崩溃
     try:
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
@@ -876,51 +732,54 @@ def main():
         pass
 
     parser = argparse.ArgumentParser(
-        description="嵌入式调试工作流状态机引擎",
+        description="嵌入式调试工作流 · 单文件线性序号驱动引擎",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  python workflow_engine.py --project "e:\\proj" --mode 0 # 只读当前状态(不推进)
-  python workflow_engine.py --project "e:\\proj" --mode 1 # 推进当前步骤
-  python workflow_engine.py --project "e:\\proj" --init   # 新对话时先初始化
-  python workflow_engine.py --project "e:\\proj" --done   # 标记完成并推进
-  python workflow_engine.py --project "e:\\proj" --reset  # 重置
-  python workflow_engine.py --project "e:\\proj" --jump DEBUG_LOOP
+  python workflow_engine.py --project "e:\\proj" --init            # 新对话初始化
+  python workflow_engine.py --project "e:\\proj" --mode 0          # 只读状态
+  python workflow_engine.py --project "e:\\proj" --mode 1          # 执行/推进当前步骤
+  python workflow_engine.py --project "e:\\proj" --ack success     # AI 步骤成功
+  python workflow_engine.py --project "e:\\proj" --ack failure     # AI 步骤失败
+  python workflow_engine.py --project "e:\\proj" --done            # = --ack success
+  python workflow_engine.py --project "e:\\proj" --wake            # 从暂停恢复
+  python workflow_engine.py --project "e:\\proj" --reset           # 重置
+  python workflow_engine.py --project "e:\\proj" --set projectInfo.buildMode=full
         """)
     parser.add_argument("--project", "-p", required=True, help="项目根目录")
-    parser.add_argument("--init", action="store_true", help="初始化调试工作流（新对话必须先执行）")
-    parser.add_argument("--done", action="store_true", help="标记当前步骤完成，推进到下一步")
+    parser.add_argument("--init", action="store_true", help="初始化工作流（新对话必须先执行）")
     parser.add_argument("--reset", action="store_true", help="重置为新任务")
-    parser.add_argument("--jump", help="跳转到指定阶段 (STARTUP/DEBUG_LOOP/VERIFY_AND_REPORT)")
-    parser.add_argument("--set", action="append", metavar="KEY=VALUE",
-                        help="设置状态字段，可多次，如 --set projectInfo.buildMode=full")
     parser.add_argument("--mode", type=int, choices=[0, 1], default=None,
-                        help="0=只读当前状态(不推进) 1=推进当前步骤(执行)")
+                        help="0=只读状态 1=执行/推进当前步骤")
+    parser.add_argument("--ack", choices=["success", "failure"], help="AI 步骤结果提交")
+    parser.add_argument("--done", action="store_true", help="= --ack success")
+    parser.add_argument("--wake", action="store_true", help="从 wait_user 暂停恢复")
+    parser.add_argument("--set", action="append", metavar="KEY=VALUE",
+                        help="设置状态字段，可多次")
 
     args = parser.parse_args()
-    project_dir = os.path.abspath(args.project)
 
-    if not os.path.isdir(project_dir):
-        print(json.dumps({
-            "error": f"项目目录不存在: {project_dir}",
-            "status": "fatal"
-        }, ensure_ascii=False, indent=2))
+    try:
+        engine = WorkflowEngine(args.project)
+    except FileNotFoundError as e:
+        print(json.dumps({"error": str(e), "status": "fatal"},
+                         ensure_ascii=False, indent=2))
         sys.exit(1)
-
-    engine = WorkflowEngine(project_dir)
 
     if args.init:
         result = engine.init()
     elif args.reset:
         result = engine.reset()
-    elif args.jump:
-        result = engine.jump(args.jump.upper())
     elif args.set:
         result = engine.set_state(args.set)
+    elif args.wake:
+        result = engine.wake()
+    elif args.ack:
+        result = engine.ack(args.ack == "success")
+    elif args.done:
+        result = engine.ack(True)
     elif args.mode == 0:
         result = engine.show_status()
-    elif args.done:
-        result = engine.advance()
     elif args.mode == 1:
         result = engine.run()
     else:
