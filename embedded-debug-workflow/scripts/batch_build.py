@@ -46,7 +46,7 @@ def main() -> None:
     # 筛选工程
     if args.index is not None:
         if args.index < 0 or args.index >= len(projects):
-            print(f"❌ 索引 {args.index} 超出范围，有效 0~{}".format(len(projects) - 1))
+            print(f"❌ 索引 {args.index} 超出范围，有效 0~{len(projects) - 1}")
             sys.exit(1)
         projects = [projects[args.index]]
 

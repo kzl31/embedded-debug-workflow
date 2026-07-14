@@ -1,6 +1,10 @@
 # 嵌入式固件调试工作流 Skill
 
-> 一个面向嵌入式开发的自动化调试助手 Skill，基于 VS Code Copilot Agent 实现。
+> 一个面向嵌入式开发的自动化调试助手 Skill，基于 VS Code Copilot Agent 实现（当然这个可以在其他Agent中使用）。
+
+<p align="center">
+  <a href="README_EN.md"><strong>🇺🇸 English README</strong></a>
+</p>
 
 ## 📖 概述
 

@@ -18,7 +18,7 @@ from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPT_DIR))
-from config_reader import load_config, get_first_project
+from config_reader import load_config, get_project
 from keil_build import find_uv4 as find_uv4_build, build_project
 from keil_flash import find_uv4 as find_uv4_flash, flash_project
 
@@ -32,6 +32,8 @@ def main() -> None:
     parser.add_argument("--build-log", help="编译日志路径")
     parser.add_argument("--flash-log", help="下载日志路径")
     parser.add_argument("--config-dir", help="配置文件所在目录（默认自动查找）")
+    parser.add_argument("--project-index", type=int, default=0,
+                        help="projects 数组下标（默认 0；调用方应传入当前文档所属项目）")
     args = parser.parse_args()
 
     config = load_config(args.config_dir)
@@ -47,9 +49,9 @@ def main() -> None:
     project_file = args.project
     project_dir = args.dir
     if not project_file or not project_dir:
-        proj = get_first_project(config)
+        proj = get_project(config, args.project_index)
         if not proj:
-            print("❌ config.json 中未配置工程信息")
+            print(f"❌ config.json 中未配置工程[{args.project_index}]信息")
             sys.exit(1)
         project_file = project_file or proj["file"]
         project_dir = project_dir or proj["dir"]

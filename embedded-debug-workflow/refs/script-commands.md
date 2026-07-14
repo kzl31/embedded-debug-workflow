@@ -5,13 +5,13 @@
 ```bash
 # ── Python 版（首选） ──
 
-# 增量编译（默认，只编译修改过的文件）
+# 增量编译（默认，只编译当前文档所属项目中修改过的文件）
 python scripts/keil_build.py --project "RU3.uvprojx"
 
 # 全编译（首次调试或宏变化时使用）
 python scripts/keil_build.py --project "RU3.uvprojx" --rebuild
 
-# 编译+下载（自动先增量编译，成功后下载）
+# 编译+下载（仅在用户明确确认 full 模式后使用；自动先增量编译，成功后下载）
 python scripts/build_and_flash.py
 
 # 串口抓日志

@@ -1,14 +1,11 @@
-# Python 字节码缓存
+# Python bytecode and local tool caches
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
 
-# data/ 为 skill 自身运行时目录
+# Workflow runtime state and per-workspace configuration
+.copilot/
 data/
 
-# 项目级生成目录（状态/配置/报告/日志统一存放于 <项目>/.copilot/，不纳入版本控制）
-.copilot/
-
-# embedded-debug-config.json 由 --init 生成在项目目录中
-# 是否纳入版本控制由用户自行决定，默认加入以避免重复采集
-# embedded-debug-config.json
+# Internal generated patch/index artifacts
+scripts/.gate_index/
+scripts/__patch*.tmp

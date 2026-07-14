@@ -93,26 +93,32 @@ steps:
   - seq: 2
     id: step_confirm_config
     phase: STARTUP
-    what: "读取配置中的全部项目，并逐项目询问本次编译下载模式"
+    what: "读取配置中的全部项目；默认仅编译当前文档所属项目，完整编译下载必须显式确认"
     action: ask_user
     params:
       template: |
         读取工作区 .copilot/embedded-debug-config.json。projects 数组是项目列表的唯一依据：
         用户可以自行增加、删除或重排项目，不得使用 project_count 推断实际数量。
-        向用户展示每个项目的下标、name、dir、file、serial 和 debugger，然后询问：
+           向用户展示每个项目的下标、name、dir、file、serial 和 debugger，然后询问：
           1. 整份配置是否已按实际环境填写完成？【已完成 / 未完成，需要修改】
           2. 对 projects 中每一个项目分别询问本次模式：
-             【编译+下载(full) / 仅编译(compile_only) / 不编译不下载(none)】
+             默认建议：当前文档所在项目为【仅编译(compile_only)】，其他项目为【不编译不下载(none)】。
+             只有用户明确要求并再次确认时，才允许选择【编译+下载(full)】；不得把 full 作为默认选项。
+             对当前文档所在项目询问：【使用默认仅编译 / 改为编译+下载(full) / 不编译不下载(none)】；
+             对其他项目询问：【保持默认跳过 / 仅编译(compile_only) / 编译+下载(full，需再次确认)】。
         项目较多时可在一次交互工具调用中询问多个项目，但每个项目必须有独立答案，
         不得用一个全局模式覆盖全部项目。
         若配置未完成，提示用户直接修改该 JSON；修改后运行
         config_reader.py --validate --path <配置文件>，校验通过才能确认完成。
         最后依次记录：
           - --set projectInfo.projectCount=<projects数组实际长度>
-          - --set projectInfo.projectModes=<按项目下标排列的逗号分隔模式，如 full,none,compile_only>
+          - --set projectInfo.currentProjectIndex=<当前文档所属项目在 projects 数组中的下标>
+          - --set projectInfo.projectModes=<按项目下标排列的逗号分隔模式，如 compile_only,none>
           - --set projectInfo.configConfirmed=<true|false>
           - --set projectInfo.buildMode=<聚合模式：任一full则full；否则任一compile_only则compile_only；全none则none>
           - --ack success
+        先根据当前文档所属工程确定 currentProjectIndex；无法唯一确定时必须询问用户，禁止
+        默认猜测。默认 projectModes 为当前项目 compile_only、其他项目 none。
         projectModes 项数必须与 projects 数组长度完全一致。后续编译、下载和串口监听
         必须逐项目读取 projectModes：none 跳过全部，compile_only 只编译，full 编译+下载+监听。
     precheck: []

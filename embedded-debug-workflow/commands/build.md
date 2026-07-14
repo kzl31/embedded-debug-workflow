@@ -72,13 +72,15 @@ action: run_script
 说明: |
   根据命令类型调用对应脚本（编译用独立 keil_build.py，下载用 keil_flash.py）：
 
-  - /kzl 编译（仅编译）：
-    python "{skill_dir}/scripts/keil_build.py" --config-dir "{project_dir}"
+  - /kzl 编译（仅编译当前文档所属项目）：
+    python "{skill_dir}/scripts/keil_build.py" --config-dir "{project_dir}" --project-index "{current_project_index}"
 
-  - /kzl 编译下载（编译+下载）：
-    python "{skill_dir}/scripts/build_and_flash.py" --config-dir "{project_dir}"
+  - /kzl 编译下载（仅在用户明确确认后执行当前项目）：
+    python "{skill_dir}/scripts/build_and_flash.py" --config-dir "{project_dir}" --project-index "{current_project_index}"
 
-  默认增量编译（仅编译修改过的文件，速度快），成功后（byxz）自动下载。
+  默认针对当前文档所属项目执行增量编译（仅编译修改过的文件，速度快），其他项目默认跳过。
+  只有用户明确选择并确认 `full` 模式时，才执行编译后下载；不要将完整编译下载作为默认动作。
+  成功后（byxz）自动下载。
   以下情况需使用 --rebuild（全编译）：
   - 修改了 .uvprojx/.uvproj 工程配置
   - 新增或修改了 CHESHI 宏定义
