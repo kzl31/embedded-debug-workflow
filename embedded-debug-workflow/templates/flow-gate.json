@@ -6,7 +6,8 @@
   "projectInfo": {
     "configFound": false,
     "initialQuestionsAnswered": false,
-    "projectCount": 0,
+    "projectCount": 2,
+    "projectModes": "none,none",
     "serialConfirmed": false,
     "hardwareReady": false,
     "faultDescribed": false,

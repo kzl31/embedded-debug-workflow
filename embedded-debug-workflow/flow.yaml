@@ -69,33 +69,9 @@ steps:
   # STARTUP 阶段
   # ============================================================
   - seq: 1
-    id: step_init_questions
+    id: step_init_config
     phase: STARTUP
-    what: "初始化开始：确认工作区工程数量、配置状态与本次编译下载模式"
-    action: ask_user
-    params:
-      template: |
-        请在初始化开始时优先使用交互式选择工具，一次询问以下 2 个问题：
-          - 工程中有多少项目，配置是否都已完成？【1 个且已完成 / 多个且均已完成 / 配置未完成】
-          - 本次需要编译下载吗？【编译+下载（完整流程） / 仅编译不下载 / 暂不编译下载（仅定位问题）】
-        用户回答后：
-          1. 用 --set projectInfo.projectCount=<数量> 记录用户确认的工程数量；无法确定时填 1。
-          2. 用 --set projectInfo.configConfirmed=<true|false> 记录配置状态。
-          3. 用 --set projectInfo.buildMode=<full|compile_only|none> 记录编译模式。
-          4. 再用 --ack success 推进。下一步会按该数量生成项目占位配置，不扫描工作区，禁止在 Python 脚本中追问配置项。
-    precheck: []
-    pre_action: []
-    on_success:
-      - update_state:
-          projectInfo.initialQuestionsAnswered: true
-      - goto: 2
-    on_failure:
-      - goto: 1
-
-  - seq: 2
-    id: step_check_config
-    phase: STARTUP
-    what: "检查工作区配置；若不存在则按用户确认的项目数量生成可编辑占位配置"
+    what: "确保工作区配置存在；首次缺失时生成双项目模板，之后完全以配置文件中的实际项目列表为准"
     action: check_file
     params:
       target: embedded-debug-config.json
@@ -107,12 +83,46 @@ steps:
       - read_config: {}
       - update_state:
           projectInfo.configFound: true
-      - goto: 3
+      - goto: 2
     on_failure:
-      - run_script: 'python scripts/config_reader.py --init "{project_dir}" --project-count {projectInfo.projectCount}'
+      - run_script: 'python scripts/config_reader.py --init "{project_dir}" --project-count 2'
       - update_state:
           projectInfo.configFound: true
+      - goto: 2
+
+  - seq: 2
+    id: step_confirm_config
+    phase: STARTUP
+    what: "读取配置中的全部项目，并逐项目询问本次编译下载模式"
+    action: ask_user
+    params:
+      template: |
+        读取工作区 .copilot/embedded-debug-config.json。projects 数组是项目列表的唯一依据：
+        用户可以自行增加、删除或重排项目，不得使用 project_count 推断实际数量。
+        向用户展示每个项目的下标、name、dir、file、serial 和 debugger，然后询问：
+          1. 整份配置是否已按实际环境填写完成？【已完成 / 未完成，需要修改】
+          2. 对 projects 中每一个项目分别询问本次模式：
+             【编译+下载(full) / 仅编译(compile_only) / 不编译不下载(none)】
+        项目较多时可在一次交互工具调用中询问多个项目，但每个项目必须有独立答案，
+        不得用一个全局模式覆盖全部项目。
+        若配置未完成，提示用户直接修改该 JSON；修改后运行
+        config_reader.py --validate --path <配置文件>，校验通过才能确认完成。
+        最后依次记录：
+          - --set projectInfo.projectCount=<projects数组实际长度>
+          - --set projectInfo.projectModes=<按项目下标排列的逗号分隔模式，如 full,none,compile_only>
+          - --set projectInfo.configConfirmed=<true|false>
+          - --set projectInfo.buildMode=<聚合模式：任一full则full；否则任一compile_only则compile_only；全none则none>
+          - --ack success
+        projectModes 项数必须与 projects 数组长度完全一致。后续编译、下载和串口监听
+        必须逐项目读取 projectModes：none 跳过全部，compile_only 只编译，full 编译+下载+监听。
+    precheck: []
+    pre_action: []
+    on_success:
+      - update_state:
+          projectInfo.initialQuestionsAnswered: true
       - goto: 3
+    on_failure:
+      - goto: 2
 
   - seq: 3
     id: step_collect_params
@@ -122,15 +132,11 @@ steps:
     params:
       template: |
         先读取 data/debug-history.yaml，对比当前故障是否存在相似历史案例。
-        若 projectInfo.configConfirmed=false，先告知用户默认配置已生成在工作区
-        .copilot/embedded-debug-config.json，必须自行补全各工程串口和下载器参数；
-        用户确认修改完成后用 --set projectInfo.configConfirmed=true 记录。
-        随后根据用户开场描述动态生成最少两轮故障追问，每轮最多 3 个问题，
+        使用 seq 2 已选择项目的配置信息，随后根据用户开场描述动态生成最多四轮故障追问，每轮最多 4 个问题，
         用于确认现象细节、复现条件、相关模块/接口、变更点和可提供的日志。
         信息足够后 --ack success 推进。
       note: |
-        优先使用交互式选择工具。初始化问题已在 seq 1 完成，本步不得重复询问
-        工程数量和编译下载模式。配置不完整时不得进入 DEBUG_LOOP。
+        本步不得重复询问配置和编译下载模式。配置不完整时不得进入 DEBUG_LOOP。
     precheck: []
     pre_action: []
     on_success:
@@ -199,7 +205,7 @@ steps:
   - seq: 6
     id: step_add_cheshi
     phase: DEBUG_LOOP
-    what: "在可疑位置插入 CHESHI 调试打印（仅 buildMode=full 时执行；迭代验证手段，严禁停下）"
+    what: "在可疑位置补充充分的 CHESHI 调试观测（仅 buildMode=full 时执行；允许为采集信息适当修改代码，严禁停下）"
     action: edit_source
     params:
       edit_action: insert_cheshi
@@ -208,8 +214,15 @@ steps:
       CHESHI 打印需下载到目标板运行才能看到日志，未下载时插入无意义。
       是否进入本步由 seq 4 依据 buildMode 判断：仅 buildMode=full 才会到达这里。
       （edit_source 属 AI 步骤，引擎不执行本步 precheck，跳过判断放在 seq 4。）
-      到达本步时：无论此刻是否已猜到根因，都必须插入打印做实证，
-      不能因为"心里有数"就跳过，也严禁在此停下向用户汇报或询问故障结论；
+      到达本步时：无论此刻是否已猜到根因，都必须补充足够的观测点做实证，
+      不能因为"心里有数"就跳过，也严禁在此停下向用户汇报或询问故障结论。
+      本步不是只加一条入口日志；至少覆盖：函数入口/出口、关键分支或状态跳转、
+      输入与输出长度、错误码/超时/重试计数、关键缓冲区索引或计数器、以及必要的原始帧摘要。
+      若现有代码无法暴露这些信息，允许增加临时变量、事件快照、计数器、环形缓冲区写入或
+      返回值记录，但不得改变业务协议、阻塞通信路径或在 ISR/通信底层直接 printf。
+      通信层只能采集事件/数据快照；由 main 主循环统一刷新调试输出。
+      所有新增调试输出（包括辅助函数、宏、环形缓冲区 Flush 以及错误路径）都必须由 CHESHI
+      条件编译或等价的 CHESHI 包裹，禁止裸 printf、puts、日志宏或未受控的调试副作用。
       确认插入完成即 --ack success 进入编译/下载环节。
       注：若因 seq 6 编译失败回到本步，此时应修复编译错误（而非纠结插打印）。
     precheck: []
@@ -226,7 +239,7 @@ steps:
     phase: DEBUG_LOOP
     what: "编译固件"
     action: run_script
-    call: 'python scripts/keil_build.py --config-dir "{project_dir}"'
+    call: 'python scripts/multi_project_runner.py --action build --config-dir "{project_dir}" --modes {projectInfo.projectModes}'
     precheck:
       - assert: 'projectInfo.buildMode != "none"'
         on_fail:
@@ -249,7 +262,7 @@ steps:
     phase: DEBUG_LOOP
     what: "下载固件到目标板"
     action: run_script
-    call: 'python scripts/keil_flash.py --config-dir "{project_dir}"'
+    call: 'python scripts/multi_project_runner.py --action flash --config-dir "{project_dir}" --modes {projectInfo.projectModes}'
     precheck:
       - assert: "debugLoopInfo.retryCount < 2"
         on_fail:
@@ -285,7 +298,7 @@ steps:
     phase: DEBUG_LOOP
     what: "启动串口监听，捕获日志（仅 buildMode=full 且已下载时执行）"
     action: run_script
-    call: 'python scripts/serial_monitor.py --config-dir "{project_dir}" --project-dir "{project_dir}" --duration 30 --save "{project_dir}/.copilot/logs/debug_log.txt"'
+    call: 'python scripts/multi_project_runner.py --action serial --config-dir "{project_dir}" --modes {projectInfo.projectModes} --duration 30 --save "{project_dir}/.copilot/logs/debug_log.txt"'
     precheck:
       - assert: 'projectInfo.buildMode == "full"'
         on_fail:
@@ -397,11 +410,20 @@ steps:
   - seq: 12
     id: step_fix_code
     phase: VERIFY_AND_REPORT
-    what: "根据根因分析结果修改业务代码，最小化改动范围"
+    what: "根据根因分析结果修改业务代码，并加入可证伪的临时验证观测"
     action: edit_source
     params:
       edit_action: fix_bug
-      note: "修改前先 git commit 当前状态，以便回退；暂时保留 CHESHI 作为修复验证观测点"
+      note: |
+        修改前先 git commit 当前状态，以便回退。
+        修复不能只凭代码阅读判断完成：必须同时设计与根因直接对应的验证条件，
+        并在修复代码附近增加临时检测观测，例如修复前后关键变量/长度/索引/状态/错误码、
+        计数器、超时与重试结果，或不变量断言失败记录。
+        检测必须能区分“原故障已消失”和“只是本轮没有复现”，并覆盖回归风险。
+        这些检测代码与打印同样必须全部使用 CHESHI 包裹；通信层只记录快照/事件，
+        不得直接 printf 或阻塞通信，最终由 main 主循环统一输出。
+        若修复需要调整时序，必须先记录原时序基线，再验证关键间隔、超时和队列行为未被破坏。
+        seq 13~16 必须基于这些观测结果判断，不能仅以编译、下载成功作为修复成功依据。
     precheck: []
     pre_action: []
     on_success:
@@ -414,7 +436,7 @@ steps:
     phase: VERIFY_AND_REPORT
     what: "编译修复后的固件（buildMode=none 时跳过）"
     action: run_script
-    call: 'python scripts/keil_build.py --config-dir "{project_dir}"'
+    call: 'python scripts/multi_project_runner.py --action build --config-dir "{project_dir}" --modes {projectInfo.projectModes}'
     precheck:
       - assert: 'projectInfo.buildMode != "none"'
         on_fail:
@@ -430,7 +452,7 @@ steps:
     phase: VERIFY_AND_REPORT
     what: "下载修复后的固件（仅 buildMode=full 执行）"
     action: run_script
-    call: 'python scripts/keil_flash.py --config-dir "{project_dir}"'
+    call: 'python scripts/multi_project_runner.py --action flash --config-dir "{project_dir}" --modes {projectInfo.projectModes}'
     precheck:
       - assert: 'projectInfo.buildMode == "full"'
         on_fail:
@@ -449,7 +471,7 @@ steps:
     phase: VERIFY_AND_REPORT
     what: "持续读取串口并保存修复验证日志，确认运行期间没有复现问题"
     action: run_script
-    call: 'python scripts/serial_monitor.py --config-dir "{project_dir}" --project-dir "{project_dir}" --duration 30 --save "{project_dir}/.copilot/logs/verify_log.txt"'
+    call: 'python scripts/multi_project_runner.py --action serial --config-dir "{project_dir}" --modes {projectInfo.projectModes} --duration 30 --save "{project_dir}/.copilot/logs/verify_log.txt"'
     precheck: []
     pre_action: []
     on_success:
@@ -460,14 +482,14 @@ steps:
   - seq: 16
     id: step_confirm_fix
     phase: VERIFY_AND_REPORT
-    what: "分析验证日志，确认原故障未复现且没有新增异常"
+    what: "分析验证日志，确认修复检测条件成立、原故障未复现且没有新增异常"
     action: analyze
     params:
       mode: verify_fix
       log: "{project_dir}/.copilot/logs/verify_log.txt"
       note: |
-        buildMode=full 时必须完整读取验证日志，确认观测窗口内原故障未复现、
-        CHESHI 观测值符合预期且无新增错误，才能 --ack success。
+        buildMode=full 时必须完整读取验证日志，确认观测窗口内修复检测条件成立、
+        原故障未复现、CHESHI 观测值符合预期且无新增错误，才能 --ack success。
         任何异常或证据不足均 --ack failure，退回 DEBUG_LOOP 重新定位和验证。
         buildMode=compile_only/none 时只能依据静态分析和编译结果裁决，并在报告中注明未做板端串口验证。
     precheck: []
@@ -503,7 +525,7 @@ steps:
     phase: VERIFY_AND_REPORT
     what: "清理 CHESHI 后重新编译，确认正式源码仍可通过编译"
     action: run_script
-    call: 'python scripts/keil_build.py --config-dir "{project_dir}"'
+    call: 'python scripts/multi_project_runner.py --action build --config-dir "{project_dir}" --modes {projectInfo.projectModes}'
     precheck:
       - assert: 'projectInfo.buildMode != "none"'
         on_fail:

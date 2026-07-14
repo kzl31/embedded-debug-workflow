@@ -18,7 +18,7 @@ from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPT_DIR))
-from config_reader import load_config, get_keil_path, get_first_project
+from config_reader import load_config, get_keil_path, get_project
 
 
 def find_uv4(config: dict | None = None) -> str | None:
@@ -128,6 +128,8 @@ def main() -> None:
     parser.add_argument("--dir", help="工程目录（默认读取配置）")
     parser.add_argument("--log", help="下载日志保存路径")
     parser.add_argument("--config-dir", help="配置文件所在目录（默认自动查找）")
+    parser.add_argument("--project-index", type=int, default=0,
+                        help="使用配置中的工程下标（默认 0）")
     args = parser.parse_args()
 
     config = load_config(args.config_dir)
@@ -142,9 +144,9 @@ def main() -> None:
     project_dir = args.dir
 
     if not project_file or not project_dir:
-        proj = get_first_project(config)
+        proj = get_project(config, args.project_index)
         if not proj:
-            print("❌ config.json 中未配置工程信息")
+            print(f"❌ 配置中未找到工程[{args.project_index}]")
             sys.exit(1)
         project_file = project_file or proj["file"]
         project_dir = project_dir or proj["dir"]

@@ -2,7 +2,7 @@
 """嵌入式调试 Skill 通用配置文件读写器。
 
 核心职责：
-    1. `--init <目录> --project-count N` — 按用户确认的项目数量生成可编辑默认配置
+    1. `--init <目录> --project-count N` — 按指定项目数量生成可编辑默认配置
   2. `--read/--validate` — 读取/校验配置
   3. 作为模块导入：load_config(config_dir) / save_config(data, config_dir)
 
@@ -42,6 +42,13 @@ from typing import Any
 
 CONFIG_FILENAME = "embedded-debug-config.json"
 """配置文件名，固定存放在工作区第一级目录的 `.copilot/` 子目录下。"""
+
+DEFAULT_UV4_PATH = r"C:\Keil_v5\UV4\UV4.exe"
+DEFAULT_BAUD = 256000
+DEFAULT_DATA_BITS = 8
+DEFAULT_STOP_BITS = 1
+DEFAULT_PARITY = "None"
+DEFAULT_DEBUGGER_TYPE = "JLink"
 
 # ── 路径解析 ──────────────────────────────────────────────────────────
 
@@ -142,6 +149,12 @@ def get_first_project(config: dict[str, Any] | None = None) -> dict[str, Any] | 
     return projects[0] if projects else None
 
 
+def get_project(config: dict[str, Any], project_index: int = 0) -> dict[str, Any] | None:
+    """按下标获取工程；下标越界时返回 None。"""
+    projects = get_projects(config)
+    return projects[project_index] if 0 <= project_index < len(projects) else None
+
+
 def _project_field(config: dict, index: int, field: str, default):
     """返回 projects[index][field]，越界或缺失时返回 default。"""
     projects = config.get("projects", [])
@@ -202,6 +215,8 @@ def validate_config(config: dict[str, Any] | None = None) -> list[str]:
         errors.append("projects 为空，至少需要一个工程")
     else:
         for i, p in enumerate(projects):
+            if not p.get("name"):
+                errors.append(f"projects[{i}].name 缺失")
             if not p.get("dir"):
                 errors.append(f"projects[{i}].dir 缺失")
             if not p.get("file"):
@@ -212,6 +227,8 @@ def validate_config(config: dict[str, Any] | None = None) -> list[str]:
             if not serial.get("baud"):
                 errors.append(f"projects[{i}].serial.baud 缺失")
             deb = p.get("debugger", {})
+            if not deb.get("type"):
+                errors.append(f"projects[{i}].debugger.type 缺失")
             if not deb.get("com"):
                 errors.append(f"projects[{i}].debugger.com 缺失")
 
@@ -229,7 +246,7 @@ def _ensure_project(config: dict, index: int) -> dict:
 # ── 启动初始化（核心） ────────────────────────────────────────────────
 
 def init_project(workspace_dir: str, project_count: int) -> dict[str, Any]:
-    """按用户确认的项目数量生成无交互占位配置。"""
+    """按指定项目数量生成无交互默认配置。"""
     if project_count < 1:
         raise ValueError("project_count 必须大于等于 1")
 
@@ -242,7 +259,7 @@ def init_project(workspace_dir: str, project_count: int) -> dict[str, Any]:
         "_generated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "workspace": str(root),
         "project_count": project_count,
-        "keil": {"uv4_path": ""},
+        "keil": {"uv4_path": DEFAULT_UV4_PATH},
     }
 
     projects: list[dict[str, Any]] = []
@@ -252,26 +269,26 @@ def init_project(workspace_dir: str, project_count: int) -> dict[str, Any]:
             "dir": "",
             "file": "",
             "serial": {
-            "port": "",
-                "baud": "",
-                "data_bits": "",
-                "stop_bits": "",
-                "parity": "",
+                "port": "COM1",
+                "baud": DEFAULT_BAUD,
+                "data_bits": DEFAULT_DATA_BITS,
+                "stop_bits": DEFAULT_STOP_BITS,
+                "parity": DEFAULT_PARITY,
             },
             "debugger": {
-                "type": "",
-                "com": "",
+                "type": DEFAULT_DEBUGGER_TYPE,
+                "com": "COM1",
             },
         })
     config["projects"] = projects
 
-    print(f"\n按用户确认数量生成 {project_count} 个项目占位项，不扫描工作区")
+    print(f"\n按指定数量生成 {project_count} 个项目配置，不扫描工作区")
 
     # ── 保存 ───────────────────────────────────────────────────────
     save_config(config, save_dir=root)
     print(f"\n✅ 初始化完成！配置文件已生成:")
     print(f"   {root / '.copilot' / CONFIG_FILENAME}")
-    print("   请直接编辑该文件，填写其中全部配置参数")
+    print("   已填入通用默认值；请修改工程路径、工程文件、COM 端口及其他实际参数")
 
     return config
 
@@ -290,7 +307,7 @@ def main() -> None:
     parser.add_argument("--init", metavar="工作区目录",
                         help="启动初始化：按项目数量生成可编辑的占位配置")
     parser.add_argument("--project-count", type=int,
-                        help="用户确认的项目数量；与 --init 一起使用")
+                        help="要生成的项目数量；与 --init 一起使用")
     parser.add_argument("--read", action="store_true", help="读取并打印当前配置")
     parser.add_argument("--validate", action="store_true", help="校验配置完整性")
     parser.add_argument("--get", choices=["keil", "serial", "projects", "debugger"],

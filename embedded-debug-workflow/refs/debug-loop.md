@@ -63,20 +63,26 @@ flowchart TD
 | 卡状态 | 状态机跳转条件 |
 | 数据异常 | 缓冲区操作、指针运算 |
 
-### 第 2 步：添加 CHESHI 调试打印
+### 第 2 步：添加 CHESHI 调试观测
 
-在可疑代码区域插入 `CHESHI` 宏控制的打印语句：
+在可疑代码区域插入 `CHESHI` 宏控制的观测点。观测应覆盖入口/出口、关键分支、
+长度与索引、错误码、超时/重试、队列或状态机变化，必要时记录原始帧摘要和时间戳。
+通信层只写入事件/数据快照，主循环统一格式化输出；ISR、DMA回调和协议底层禁止直接 `printf`。
+如果现有代码无法提供证据，允许增加临时变量、计数器、快照或环形缓冲区，但不得改变业务协议或阻塞通信路径。
 
 ```c
 // 通用入口打印
 #if (CHESHI & 0x01)
     printf("[SAFE_PARSE] addr=%d cnt=%d\r\n", usRegAddress, usRegCount);
 #endif
-// RAW 数据打印
+// 通信层：只采集 RAW 快照，禁止直接打印
 #if (CHESHI & 0x02)
-    printf("[RAW] ");
-    for(int _i=0; _i<8&&_i<*usLen; _i++) printf("%02X ", pucFrame[_i]);
-    printf("\r\n");
+    debug_capture_frame(pucFrame, *usLen);
+#endif
+
+// main 主循环：统一输出已采集的调试快照
+#if (CHESHI & 0x02)
+    Debug_Flush();
 #endif
 ```
 
@@ -160,8 +166,9 @@ python scripts/serial_monitor.py --duration 15 --save .copilot/logs/debug_round_
 
 ### 定位根因后
 
-1. 修改业务代码（非 CHESHI 调试代码）
-2. 编译并下载验证（下载失败时遵循上述重试规则）
+1. 修改业务代码（非 CHESHI 调试代码），同时保留与根因直接对应的临时验证检测
+2. 验证检测必须能证明修复条件成立，而不是只证明本轮没有复现
+3. 编译并下载验证（下载失败时遵循上述重试规则）
 
 ```bash
 python scripts/build_and_flash.py
@@ -170,7 +177,7 @@ python scripts/serial_monitor.py --duration 10
 
 ### 验证通过后
 
-1. 删除 `main.c` 头部的全部 CHESHI 宏定义和调试打印
+1. 删除 `main.c` 头部的全部 CHESHI 宏定义和调试打印、采集器及验证检测
 2. 最终编译确认无误
 3. 执行 Git 合并（参见 `refs/git-rules.md`）
 4. 输出故障解决报告（参见 `templates/report.md`）

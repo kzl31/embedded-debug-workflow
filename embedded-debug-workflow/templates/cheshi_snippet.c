@@ -23,11 +23,14 @@
     printf("[COMMON] func=%s line=%d\r\n", __FUNCTION__, __LINE__);
 #endif
 
-/* 通信原始帧打印 Bit1 */
+/* 通信层只采集快照；禁止在通信回调/ISR中直接 printf */
 #if (CHESHI & 0x02)
-    printf("[COMM_RAW] len=%d data:", len);
-    for (int _i = 0; _i < len && _i < 16; _i++) printf(" %02X", pbuf[_i]);
-    printf("\r\n");
+    debug_capture_frame(pbuf, len);
+#endif
+
+/* main 主循环统一输出通信快照 Bit1 */
+#if (CHESHI & 0x02)
+    Debug_Flush();
 #endif
 
 /* 外设驱动状态打印 Bit2 */

@@ -23,7 +23,7 @@ from pathlib import Path
 # 引入 config_reader
 _SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPT_DIR))
-from config_reader import load_config, get_keil_path, get_first_project
+from config_reader import load_config, get_keil_path, get_project
 
 
 def find_uv4(config: dict | None = None) -> str | None:
@@ -183,6 +183,8 @@ def main() -> None:
     parser.add_argument("--log", help="编译日志保存路径")
     parser.add_argument("--find-uv4", action="store_true", help="仅探测 UV4 路径并退出")
     parser.add_argument("--config-dir", help="配置文件所在目录（默认自动查找）")
+    parser.add_argument("--project-index", type=int, default=0,
+                        help="使用配置中的工程下标（默认 0）")
     args = parser.parse_args()
 
     # 仅探测 UV4
@@ -217,9 +219,9 @@ def main() -> None:
         # 否则 project_file 只是文件名，仍需要从配置或 --dir 获取目录
 
     if not project_file or not project_dir:
-        proj = get_first_project(config)
+        proj = get_project(config, args.project_index)
         if not proj:
-            print("❌ 未找到工程信息，请提供:")
+            print(f"❌ 未找到工程[{args.project_index}]信息，请提供:")
             print("   python keil_build.py --dir <工程目录> --project <工程文件>")
             print("   或使用 --config-dir 指定项目根目录（内需含 embedded-debug-config.json）")
             sys.exit(1)

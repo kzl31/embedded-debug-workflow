@@ -178,7 +178,8 @@ def _default_flow_gate() -> dict:
         "projectInfo": {
             "configFound": False,
             "initialQuestionsAnswered": False,
-            "projectCount": 0,
+            "projectCount": 2,
+            "projectModes": "none,none",
             "serialConfirmed": False,
             "hardwareReady": False,
             "faultDescribed": False,
@@ -574,7 +575,7 @@ class WorkflowEngine:
             child_env = os.environ.copy()
             child_env["PYTHONIOENCODING"] = "utf-8"
             result = subprocess.run(cmd, shell=True, cwd=str(SKILL_DIR),
-                                    timeout=120, env=child_env,
+                                    timeout=600, env=child_env,
                                     stdin=subprocess.DEVNULL)
             ok = result.returncode == 0
             print(f"[exec] {'✅' if ok else '❌'} 退出码 {result.returncode}", file=sys.stdout)

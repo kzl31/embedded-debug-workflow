@@ -7,7 +7,7 @@
 
 2. **Git 版本管控规则** — 全程禁止 `git push`，所有分支/提交/回退仅在本地操作；临时 CHESHI 代码与正式业务修复代码强制隔离。详见 `refs/git-rules.md`。
 
-3. **CHESHI 统一宏规范** — 全局仅使用 `CHESHI` 单一调试总开关（Bit 位掩码或数值分级）；宏定义集中写在 `main.c` 头部，调试结束整段删除。详见 `refs/cheshi-macro.md`。
+3. **CHESHI 统一宏规范** — 全局仅使用 `CHESHI` 单一调试总开关（Bit 位掩码或数值分级）；所有新增调试输出、采集器和 Flush 路径必须受 `CHESHI` 包裹。通信层/ISR 仅采集快照，由 `main` 主循环输出；宏定义集中写在 `main.c` 头部，调试结束整段删除。详见 `refs/cheshi-macro.md`。
 
 4. **动态路径加载规则** — 所有脚本运行时自动读取项目目录下的 `embedded-debug-config.json`；`uv4_path` 固定为 `C:\Keil_v5\UV4\UV4.exe` 自动填入，不询问用户。详见 `refs/config-format.md`。
 

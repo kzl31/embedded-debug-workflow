@@ -265,11 +265,14 @@ def main() -> None:
     parser.add_argument("--save", help="日志保存路径")
     parser.add_argument("--wait", help="等待关键字后停止")
     parser.add_argument("--config-dir", help="配置文件所在目录（默认自动查找）")
+    parser.add_argument("--project-index", type=int,
+                        help="使用配置中的工程下标；优先于 --project-dir")
     parser.add_argument("--project-dir", help="指定工程目录，用于匹配对应工程的串口参数")
     args = parser.parse_args()
 
     config = load_config(args.config_dir)
-    project_index = _select_project_index(config, args.project_dir)
+    project_index = (args.project_index if args.project_index is not None
+                     else _select_project_index(config, args.project_dir))
     serial_cfg = get_serial_config(config, project_index)
 
     port = fix_port_name(args.port or serial_cfg["port"])

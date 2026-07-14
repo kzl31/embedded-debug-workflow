@@ -42,6 +42,7 @@ embedded-debug-workflow/
 │   ├── serial_read.py     #   串口单次读取 (Python)
 │   ├── serial_monitor.py  #   串口持续监听 (Python)
 │   ├── batch_build.py     #   多工程批量操作 (Python)
+│   ├── multi_project_runner.py # 按逐项目模式执行编译/下载/串口监听
 │   └── workflow_engine.py #   🔑 流程引擎（查表 + 序号跳转，零硬编码步骤）
 ├── refs/                  # AI 按需加载的详细规范
 │   ├── core-rules.md      #   强制规则（AI 行为约束）
@@ -81,26 +82,27 @@ embedded-debug-workflow/
 Skill 激活后，AI 按以下模式驱动引擎（**唯一流程入口**）：
 
 ```
-① 新对话 → 运行引擎 --init 初始化状态，首先询问工作区工程数量/配置状态与编译下载模式
-② 若配置不存在，按用户确认的项目数量，在工作区 .copilot 下生成全参数占位配置供用户编辑
-③ 运行引擎 --mode 0 读取当前状态（当前 seq / phase / 待办）
-④ 运行引擎 --mode 1 执行/推进当前步骤：
+① 新对话 → 运行引擎 --init 初始化状态，不询问用户
+② 若配置不存在，固定在工作区 .copilot 下生成两个带通用默认值的项目配置
+③ 读取配置中的实际 projects 数组，逐项目询问独立模式（编译下载/仅编译/不执行）
+④ 运行引擎 --mode 0 读取当前状态（当前 seq / phase / 待办）
+⑤ 运行引擎 --mode 1 执行/推进当前步骤：
    - 自动步骤（run_script/check_file/...）：引擎直接执行并按 flow.yaml 的
      on_success / on_failure 自动跳转，直到遇到 AI 步骤或完成
    - AI 步骤（ask_user/edit_source/analyze/report/...）：引擎输出指令（status=awaiting_ai），
      AI 执行后提交 --ack success（或 --ack failure）
    - 人工暂停（wait_user）：status=awaiting_user，处理完 --wake 恢复
-⑤ 重复 ③~④，直至 status=completed
+⑥ 重复 ④~⑤，直至 status=completed
 ```
 
-> 初始化不扫描工作区，也不推断任何参数；Keil、工程、串口与下载器参数全部由用户编辑配置文件。
+> 初始化不扫描工作区；生成 Keil、串口和下载器通用默认值，工程路径及实际端口由用户编辑配置文件。
 > 所有流程逻辑（步骤顺序、跳转、条件）都写在 `flow.yaml`，引擎只是按 `seq` 查表执行。
 
 ### 典型调试流程
 
 ```
-1. STARTUP 开始先确认工程数量、配置状态和编译下载模式
-2. AI 读取 embedded-debug-config.json 获取环境参数（无则按用户确认的项目数量生成占位配置）
+1. STARTUP 自动确保双项目默认配置存在，全程不询问
+2. AI 读取 embedded-debug-config.json，以 projects 数组为唯一项目列表，并逐项目询问执行模式
 3. AI 注入 CHESHI 调试宏，自动编译下载并抓取日志（seq 5~9）
 4. AI 分析日志并迭代定位根因（seq 10，必要时回到 seq 6）
 5. 定位根因后先修复业务代码，保留 CHESHI 观测点
@@ -110,7 +112,7 @@ Skill 激活后，AI 按以下模式驱动引擎（**唯一流程入口**）：
 
 ## 📝 规范要点
 
-- **CHESHI 宏**：Bit 位掩码或数值分级，集中写在 main.c 头部，调试结束整段删除
+- **CHESHI 宏**：Bit 位掩码或数值分级，所有调试内容受 CHESHI 包裹；通信层仅采集快照，main 主循环统一输出，调试结束整段删除
 - **Git 管控**：仅本地操作，禁止 git push；调试分支命名 `debug/故障简述_YYYYMMDD`
 - **8 轮上限**：自动加打印满 8 轮仍无法定位 → 触发人工求助（`wait_user`）
 - **三类暂停**：设备断电重启 / Keil 断点调试 / 迭代上限求助

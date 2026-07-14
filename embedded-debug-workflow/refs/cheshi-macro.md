@@ -10,6 +10,8 @@
 2. **集中定义**：所有宏定义写在 `main.c` 文件头部，调试结束直接整段删除
 3. **优先 Bit 位掩码**（方案A）；项目不支持位运算时用数值分级（方案B）
 4. 中断环形缓冲区打印同样统一使用该宏控制
+5. 通信层只采集快照/事件，不得直接 `printf`；由 `main` 主循环统一输出
+6. 所有新增调试输出都必须由 `CHESHI` 条件编译包裹，包括错误路径、辅助函数和 Flush 逻辑
 
 ---
 
@@ -39,11 +41,14 @@
     printf("[COMMON] func enter, dataLen=%d\r\n", len);
 #endif
 
-// 通信原始数据打印 Bit1
+// 通信层只记录快照，不在通信路径直接打印
 #if (CHESHI & 0x02)
-    printf("[COMM_RAW] PDU: ");
-    for(int i=0; i<8 && i<len; i++) printf("%02X ", pucFrame[i]);
-    printf("\r\n");
+    debug_capture_frame(pucFrame, len);
+#endif
+
+// main 主循环统一输出通信原始数据 Bit1
+#if (CHESHI & 0x02)
+    Debug_Flush();
 #endif
 
 // 外设驱动打印 Bit2
@@ -135,20 +140,25 @@ uint16_t g_dbg_wr = 0, g_dbg_rd = 0;
 
 // 中断内写入字节
 void USART3_IRQHandler(void) {
-#ifdef CHESHI
+#if (CHESHI & 0x02)
     g_dbg_buf[g_dbg_wr++ % DBG_BUF_SIZE] = rx_byte;
 #endif
 }
 
 // 主循环统一输出
 void Debug_Flush(void) {
-#ifdef CHESHI
+#if (CHESHI & 0x02)
     while (g_dbg_rd != g_dbg_wr) {
-        printf("%02X ", g_dbg_buf[g_dbg_rd++ % DBG_BUF_SIZE]);
+        printf("[COMM_RAW] %02X\r\n", g_dbg_buf[g_dbg_rd++ % DBG_BUF_SIZE]);
     }
 #endif
 }
 ```
+
+`Debug_Flush()` 必须在 `main` 主循环或其调用链中执行。不得在 ISR、DMA 回调、
+协议接收回调或其它通信底层路径中直接调用 `printf`、`puts` 或阻塞式日志接口。
+采集逻辑应尽量短，必要时记录时间戳、事件类型、长度、读写索引、错误码和丢包计数，
+由主循环在不影响通信时序的上下文中格式化并输出。
 
 ```mermaid
 flowchart LR
