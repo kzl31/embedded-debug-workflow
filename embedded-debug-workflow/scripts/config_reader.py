@@ -2,7 +2,7 @@
 """嵌入式调试 Skill 通用配置文件读写器。
 
 核心职责：
-  1. `--init <目录>`     — 启动初始化：自动探测工程、逐工程采集串口/下载器、生成配置
+    1. `--init <目录> --project-count N` — 按用户确认的项目数量生成可编辑默认配置
   2. `--read/--validate` — 读取/校验配置
   3. 作为模块导入：load_config(config_dir) / save_config(data, config_dir)
 
@@ -43,13 +43,6 @@ from typing import Any
 CONFIG_FILENAME = "embedded-debug-config.json"
 """配置文件名，固定存放在工作区第一级目录的 `.copilot/` 子目录下。"""
 
-DEFAULT_UV4_PATH = r"C:\Keil_v5\UV4\UV4.exe"
-"""固定 Keil UV4 路径，不纳入用户采集项。"""
-
-PROJECT_EXTENSIONS = {".uvprojx", ".uvproj"}
-"""Keil 工程文件扩展名。"""
-
-
 # ── 路径解析 ──────────────────────────────────────────────────────────
 
 def get_skill_dir() -> Path:
@@ -77,7 +70,10 @@ def resolve_config_path(path_or_dir: str | Path | None = None) -> Path:
 def get_config_path(save_dir: str | Path | None = None) -> Path:
     """返回配置文件写入路径（工作区第一级 `.copilot/` 下，不向上查找）。"""
     if save_dir:
-        return Path(save_dir).resolve() / ".copilot" / CONFIG_FILENAME
+        path = Path(save_dir).resolve()
+        if path.name == CONFIG_FILENAME:
+            return path
+        return path / ".copilot" / CONFIG_FILENAME
     return resolve_config_path(None)
 
 
@@ -230,125 +226,52 @@ def _ensure_project(config: dict, index: int) -> dict:
     return projects[index]
 
 
-# ── 工程扫描 ──────────────────────────────────────────────────────────
-
-def scan_keil_projects(project_dir: str | Path) -> list[dict[str, str]]:
-    """扫描指定目录树查找 .uvprojx/.uvproj 文件。
-
-    返回格式：[{ "name": "工程名", "dir": "目录", "file": "文件名" }]
-    """
-    root = Path(project_dir).resolve()
-    found: list[dict[str, str]] = []
-    for ext in PROJECT_EXTENSIONS:
-        for fpath in sorted(root.rglob(f"*{ext}")):
-            if fpath.is_file():
-                found.append({
-                    "name": fpath.stem,
-                    "dir": str(fpath.parent),
-                    "file": fpath.name,
-                })
-    return found
-
-
 # ── 启动初始化（核心） ────────────────────────────────────────────────
 
-def _ask(prompt: str) -> str:
-    """打印提示并读取一行输入：每条提示独占一行，排版更清晰。"""
-    print(prompt)
-    return input("    ↳ ").strip()
+def init_project(workspace_dir: str, project_count: int) -> dict[str, Any]:
+    """按用户确认的项目数量生成无交互占位配置。"""
+    if project_count < 1:
+        raise ValueError("project_count 必须大于等于 1")
 
-
-def init_project(project_dir: str) -> dict[str, Any]:
-    """启动初始化流程：扫描工程 → 采集参数 → 保存配置到项目根目录。
-
-    uv4_path 固定为 DEFAULT_UV4_PATH，不纳入用户采集项。
-    """
-    root = Path(project_dir).resolve()
+    root = Path(workspace_dir).resolve()
     print("=" * 50)
-    print(f"🔧 嵌入式调试初始化 — 项目: {root}")
+    print(f"🔧 嵌入式调试初始化 — 工作区: {root}")
     print("=" * 50)
 
     config: dict[str, Any] = {
         "_generated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "keil": {"uv4_path": DEFAULT_UV4_PATH},
+        "workspace": str(root),
+        "project_count": project_count,
+        "keil": {"uv4_path": ""},
     }
 
-    # ── 步骤1: 扫描工程 ────────────────────────────────────────────
-    print("\n[1/4] 扫描 Keil 工程文件...")
-    detected = scan_keil_projects(root)
-    projects: list[dict[str, str]] = []
-
-    if detected:
-        print(f"  发现 {len(detected)} 个工程:")
-        for i, p in enumerate(detected):
-            print(f"    [{i}] {p['name']}  →  {p['dir']}\\{p['file']}")
-        import re
-        use_all = _ask("  是否全部采用？(Y/n，或输入编号以逗号分隔）")
-        # 如果输入包含数字，直接作为编号选择处理（兼容"2"或"0,2"等格式）
-        if re.search(r'\d', use_all):
-            indices_str = use_all
-            for idx_str in indices_str.split(","):
-                idx_str = idx_str.strip()
-                if idx_str.isdigit() and 0 <= int(idx_str) < len(detected):
-                    projects.append(detected[int(idx_str)])
-            if not projects:
-                print("  ⚠️ 未选择任何工程，进入手动添加")
-        elif use_all.lower() in ("n", "no"):
-            indices_str = _ask("  请输入要采用的工程编号（逗号分隔，如 0,1）")
-            if indices_str:
-                for idx_str in indices_str.split(","):
-                    idx_str = idx_str.strip()
-                    if idx_str.isdigit() and 0 <= int(idx_str) < len(detected):
-                        projects.append(detected[int(idx_str)])
-            if not projects:
-                print("  ⚠️ 未选择任何工程，进入手动添加")
-        else:
-            projects = detected
-    else:
-        print("  ⚠️ 未自动扫描到工程文件")
-
-    if not projects:
-        print("\n  手动添加工程（至少一个）：")
-        while True:
-            print("    ─────────────────────────")
-            name = _ask("    工程名称（留空结束）")
-            if not name:
-                break
-            pdir = _ask(f"    {name} → 工程目录")
-            pfile = _ask(f"    {name} → .uvprojx 文件名")
-            projects.append({"name": name, "dir": pdir, "file": pfile})
-    if not projects:
-        print("\n  未添加任何工程，至少添加一个：")
+    projects: list[dict[str, Any]] = []
+    for index in range(project_count):
         projects.append({
-            "name": _ask("    工程名称"),
-            "dir": _ask("    工程目录"),
-            "file": _ask("    .uvprojx 文件名"),
+            "name": f"project{index + 1}",
+            "dir": "",
+            "file": "",
+            "serial": {
+            "port": "",
+                "baud": "",
+                "data_bits": "",
+                "stop_bits": "",
+                "parity": "",
+            },
+            "debugger": {
+                "type": "",
+                "com": "",
+            },
         })
     config["projects"] = projects
 
-    # ── 步骤2: 逐工程采集串口与下载器参数 ──────────────────────────
-    print("\n[2/4] 逐工程采集串口与下载器参数")
-    for p in projects:
-        print(f"\n  ▶ 工程: {p['name']}  ({p['dir']}\\{p['file']})")
-        print("    ── 串口参数 ──")
-        p["serial"] = {
-            "port": _ask("    串口号 (如 COM19)"),
-            "baud": int(_ask("    波特率 (如 256000)") or "256000"),
-            "data_bits": int(_ask("    数据位 (默认 8)") or "8"),
-            "stop_bits": int(_ask("    停止位 (默认 1)") or "1"),
-            "parity": _ask("    校验位 (None/Odd/Even, 默认 None)") or "None",
-        }
-        print("    ── 下载器参数 ──")
-        p["debugger"] = {
-            "type": _ask("    下载器类型 (JLink/ST-Link, 默认 JLink)") or "JLink",
-            "com": _ask("    下载器串口号 (如 COM9)"),
-        }
+    print(f"\n按用户确认数量生成 {project_count} 个项目占位项，不扫描工作区")
 
     # ── 保存 ───────────────────────────────────────────────────────
     save_config(config, save_dir=root)
     print(f"\n✅ 初始化完成！配置文件已生成:")
     print(f"   {root / '.copilot' / CONFIG_FILENAME}")
-    print(f"   UV4 路径: {DEFAULT_UV4_PATH}（固定值）")
+    print("   请直接编辑该文件，填写其中全部配置参数")
 
     return config
 
@@ -364,8 +287,10 @@ def main() -> None:
         pass
 
     parser = argparse.ArgumentParser(description="嵌入式调试配置文件管理器")
-    parser.add_argument("--init", metavar="项目目录",
-                        help="启动初始化：扫描工程→采集参数→生成配置到项目目录")
+    parser.add_argument("--init", metavar="工作区目录",
+                        help="启动初始化：按项目数量生成可编辑的占位配置")
+    parser.add_argument("--project-count", type=int,
+                        help="用户确认的项目数量；与 --init 一起使用")
     parser.add_argument("--read", action="store_true", help="读取并打印当前配置")
     parser.add_argument("--validate", action="store_true", help="校验配置完整性")
     parser.add_argument("--get", choices=["keil", "serial", "projects", "debugger"],
@@ -379,7 +304,9 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.init:
-        init_project(args.init)
+        if args.project_count is None:
+            parser.error("--init 必须同时提供 --project-count")
+        init_project(args.init, args.project_count)
         return
 
     # 解析实际配置文件路径
@@ -396,8 +323,7 @@ def main() -> None:
         if args.set_baud:
             proj["serial"]["baud"] = args.set_baud
             print(f"  工程[{args.project_index}] 波特率 → {args.set_baud}")
-        save_dir = cfg_path.parent if (cfg_path and cfg_path.is_file()) else cfg_path
-        save_config(data, save_dir)
+        save_config(data, cfg_path)
         return
 
     if args.get:

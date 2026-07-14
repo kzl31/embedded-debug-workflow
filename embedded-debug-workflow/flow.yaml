@@ -69,14 +69,37 @@ steps:
   # STARTUP 阶段
   # ============================================================
   - seq: 1
+    id: step_init_questions
+    phase: STARTUP
+    what: "初始化开始：确认工作区工程数量、配置状态与本次编译下载模式"
+    action: ask_user
+    params:
+      template: |
+        请在初始化开始时优先使用交互式选择工具，一次询问以下 2 个问题：
+          - 工程中有多少项目，配置是否都已完成？【1 个且已完成 / 多个且均已完成 / 配置未完成】
+          - 本次需要编译下载吗？【编译+下载（完整流程） / 仅编译不下载 / 暂不编译下载（仅定位问题）】
+        用户回答后：
+          1. 用 --set projectInfo.projectCount=<数量> 记录用户确认的工程数量；无法确定时填 1。
+          2. 用 --set projectInfo.configConfirmed=<true|false> 记录配置状态。
+          3. 用 --set projectInfo.buildMode=<full|compile_only|none> 记录编译模式。
+          4. 再用 --ack success 推进。下一步会按该数量生成项目占位配置，不扫描工作区，禁止在 Python 脚本中追问配置项。
+    precheck: []
+    pre_action: []
+    on_success:
+      - update_state:
+          projectInfo.initialQuestionsAnswered: true
+      - goto: 2
+    on_failure:
+      - goto: 1
+
+  - seq: 2
     id: step_check_config
     phase: STARTUP
-    what: "检查项目目录下是否存在嵌入式调试配置文件"
+    what: "检查工作区配置；若不存在则按用户确认的项目数量生成可编辑占位配置"
     action: check_file
     params:
       target: embedded-debug-config.json
       search_paths:
-        - "{project_dir}"
         - "{project_dir}/.copilot"
     precheck: []
     pre_action: []
@@ -84,71 +107,36 @@ steps:
       - read_config: {}
       - update_state:
           projectInfo.configFound: true
-    on_failure:
-      - run_script: 'python scripts/config_reader.py --init "{project_dir}"'
-      - update_state:
-          projectInfo.configFound: true
-          projectInfo.serialConfirmed: true
-
-  - seq: 2
-    id: step_check_memory
-    phase: STARTUP
-    what: "查看调试记忆：检查 data/debug-history.yaml 中是否有相似故障的历史修复记录"
-    action: analyze
-    params:
-      target: data/debug-history.yaml
-      note: |
-        请读取 data/debug-history.yaml 文件，查看其中记录的过往故障和修复方案。
-        对比当前故障现象，判断是否有相似的历史案例可以借鉴：
-        - 若有相似故障，记录其根因和修复方案，在后续调试中优先参考
-        - 若历史中有多次相似故障，分析是否有共性问题
-        - 若无相似案例，标记为首次遇到此类故障，继续后续流程
-        完成后 --ack success 推进。
-    precheck: []
-    pre_action: []
-    on_success:
-      - update_state:
-          projectInfo.memoryChecked: true
       - goto: 3
     on_failure:
+      - run_script: 'python scripts/config_reader.py --init "{project_dir}" --project-count {projectInfo.projectCount}'
+      - update_state:
+          projectInfo.configFound: true
       - goto: 3
 
   - seq: 3
     id: step_collect_params
     phase: STARTUP
-    what: "采集参数：故障现象 + 工程配置确认 + 编译下载模式（三轮交互式提问）"
+    what: "查看历史调试记忆并采集故障现象；默认配置未完成时提醒用户先修改"
     action: ask_user
     params:
       template: |
-        请使用你环境中可用的交互式选择工具（如选项框、多选组件等）向我（用户）提问，让用户直接点击选项作答，而非打字输入。每轮最多 3 个问题：
-
-        ▶ 第一轮（调用 2 次选择工具）
-        第 1 次（2 个问题）：
-          - 工程配置是否已完成？【已完成 / 未完成】
-          - 本次需要编译下载吗？【编译+下载（完整流程） / 仅编译不下载 / 暂不编译下载（仅定位问题）】
-        第 2 次（最多 3 个问题）：
-          - 根据我开场描述的故障动态生成，用于确定到底是什么问题（现象细节、复现条件、相关模块/接口等），每条附 2-3 个选项。
-
-        ▶ 第二轮（调用 1 次选择工具，最多 3 个问题）
-        根据上一轮的回答继续追问，进一步锁定根因方向。
-
-        ▶ 第三轮（调用 1 次选择工具，最多 3 个问题）
-        仍不确定时再补充追问（变更点 / 复现频率 / 相关模块预期行为 / 可提供的额外日志）。
-        三轮结束后，用 --set projectInfo.buildMode=<full|compile_only|none> 记录编译模式，再 --ack success 推进。
+        先读取 data/debug-history.yaml，对比当前故障是否存在相似历史案例。
+        若 projectInfo.configConfirmed=false，先告知用户默认配置已生成在工作区
+        .copilot/embedded-debug-config.json，必须自行补全各工程串口和下载器参数；
+        用户确认修改完成后用 --set projectInfo.configConfirmed=true 记录。
+        随后根据用户开场描述动态生成最少两轮故障追问，每轮最多 3 个问题，
+        用于确认现象细节、复现条件、相关模块/接口、变更点和可提供的日志。
+        信息足够后 --ack success 推进。
       note: |
-        你（AI）优先使用环境中可用的交互式选择工具（如选项框、按钮组件等）来提问，让用户点击选择而非打字：
-          - 每个问题提供 2-3 个互斥选项，第一个为推荐选项
-          - 问题描述用单句，选项描述用一句话说明影响
-          - 三轮共调用 4 次工具：第一轮 2 次，第二轮 1 次，第三轮 1 次
-          - 所有轮次结束后，根据用户选择用 --set 命令记录关键参数，再 --ack success
-        如果你的环境没有交互式选择工具，则回退为纯文本 Q&A 方式提问。
-        确认后用 --set projectInfo.buildMode=<full|compile_only|none> 记录，再 --ack success 推进。
+        优先使用交互式选择工具。初始化问题已在 seq 1 完成，本步不得重复询问
+        工程数量和编译下载模式。配置不完整时不得进入 DEBUG_LOOP。
     precheck: []
     pre_action: []
     on_success:
       - update_state:
           projectInfo.faultDescribed: true
-          projectInfo.configConfirmed: true
+          projectInfo.memoryChecked: true
       - log:
           level: info
           msg: "参数已确认，进入调试流程"
@@ -407,60 +395,40 @@ steps:
   # VERIFY_AND_REPORT 阶段
   # ============================================================
   - seq: 12
-    id: step_clean_cheshi
-    phase: VERIFY_AND_REPORT
-    what: "删除所有 CHESHI 调试代码块，恢复源代码"
-    action: edit_source
-    params:
-      edit_action: remove_cheshi
-      compile_verify: true
-    precheck: []
-    pre_action: []
-    on_success:
-      - update_state:
-          verifyReport.cheshiCleaned: true
-      - goto: 13
-    on_failure:
-      - goto: 12
-
-  - seq: 13
     id: step_fix_code
     phase: VERIFY_AND_REPORT
     what: "根据根因分析结果修改业务代码，最小化改动范围"
     action: edit_source
     params:
       edit_action: fix_bug
-      note: "修改前先 git commit 当前状态，以便回退"
+      note: "修改前先 git commit 当前状态，以便回退；暂时保留 CHESHI 作为修复验证观测点"
     precheck: []
     pre_action: []
     on_success:
-      - goto: 14
-    on_failure:
       - goto: 13
+    on_failure:
+      - goto: 12
 
-  - seq: 14
+  - seq: 13
     id: step_verify_build
     phase: VERIFY_AND_REPORT
-    what: "编译并验证故障已解决（buildMode=none 时跳过）"
+    what: "编译修复后的固件（buildMode=none 时跳过）"
     action: run_script
     call: 'python scripts/keil_build.py --config-dir "{project_dir}"'
     precheck:
       - assert: 'projectInfo.buildMode != "none"'
         on_fail:
-          - goto: 15
+          - goto: 16
     pre_action: []
     on_success:
-      - log:
-          level: info
-          msg: "编译通过"
-      - goto: 15
+      - goto: 14
     on_failure:
       - goto: 5
 
-  - seq: 15
+  - seq: 14
     id: step_verify_flash
     phase: VERIFY_AND_REPORT
-    what: "下载固件并验证（仅 buildMode=full 执行）"
+    what: "下载修复后的固件（仅 buildMode=full 执行）"
     action: run_script
     call: 'python scripts/keil_flash.py --config-dir "{project_dir}"'
     precheck:
@@ -471,13 +439,82 @@ steps:
     on_success:
       - log:
           level: info
-          msg: "验证通过，故障已解决"
-      - run_script: 'python scripts/serial_monitor.py --duration 10 --save "{project_dir}/.copilot/logs/verify_log.txt"'
+          msg: "修复固件下载成功，开始串口验证"
+      - goto: 15
+    on_failure:
+      - goto: 5
+
+  - seq: 15
+    id: step_verify_capture_log
+    phase: VERIFY_AND_REPORT
+    what: "持续读取串口并保存修复验证日志，确认运行期间没有复现问题"
+    action: run_script
+    call: 'python scripts/serial_monitor.py --config-dir "{project_dir}" --project-dir "{project_dir}" --duration 30 --save "{project_dir}/.copilot/logs/verify_log.txt"'
+    precheck: []
+    pre_action: []
+    on_success:
       - goto: 16
     on_failure:
       - goto: 5
 
   - seq: 16
+    id: step_confirm_fix
+    phase: VERIFY_AND_REPORT
+    what: "分析验证日志，确认原故障未复现且没有新增异常"
+    action: analyze
+    params:
+      mode: verify_fix
+      log: "{project_dir}/.copilot/logs/verify_log.txt"
+      note: |
+        buildMode=full 时必须完整读取验证日志，确认观测窗口内原故障未复现、
+        CHESHI 观测值符合预期且无新增错误，才能 --ack success。
+        任何异常或证据不足均 --ack failure，退回 DEBUG_LOOP 重新定位和验证。
+        buildMode=compile_only/none 时只能依据静态分析和编译结果裁决，并在报告中注明未做板端串口验证。
+    precheck: []
+    pre_action: []
+    on_success:
+      - update_state:
+          verifyReport.fixConfirmed: true
+      - goto: 17
+    on_failure:
+      - update_state:
+          verifyReport.fixConfirmed: false
+      - goto: 5
+
+  - seq: 17
+    id: step_clean_cheshi
+    phase: VERIFY_AND_REPORT
+    what: "确认故障解决后，删除所有 CHESHI 调试代码块并恢复正式源码"
+    action: edit_source
+    params:
+      edit_action: remove_cheshi
+      require_state: verifyReport.fixConfirmed
+    precheck: []
+    pre_action: []
+    on_success:
+      - update_state:
+          verifyReport.cheshiCleaned: true
+      - goto: 18
+    on_failure:
+      - goto: 17
+
+  - seq: 18
+    id: step_clean_build
+    phase: VERIFY_AND_REPORT
+    what: "清理 CHESHI 后重新编译，确认正式源码仍可通过编译"
+    action: run_script
+    call: 'python scripts/keil_build.py --config-dir "{project_dir}"'
+    precheck:
+      - assert: 'projectInfo.buildMode != "none"'
+        on_fail:
+          - goto: 19
+    pre_action: []
+    on_success:
+      - goto: 19
+    on_failure:
+      - goto: 17
+
+  - seq: 19
     id: step_regression
     phase: VERIFY_AND_REPORT
     what: "确认修复未引入新问题，其他功能模块正常"
@@ -497,11 +534,11 @@ steps:
     precheck: []
     pre_action: []
     on_success:
-      - goto: 17
+      - goto: 20
     on_failure:
-      - goto: 16
+      - goto: 5
 
-  - seq: 17
+  - seq: 20
     id: step_report
     phase: VERIFY_AND_REPORT
     what: "生成标准化报告 .md + 写记忆索引"
@@ -530,11 +567,11 @@ steps:
           debugSession.reportFile: "{report_path}"
           debugSession.memorySaved: true
           debugSession.endTime: "{now}"
-      - goto: 18
+      - goto: 21
     on_failure:
-      - goto: 17
+      - goto: 20
 
-  - seq: 18
+  - seq: 21
     id: step_complete
     phase: VERIFY_AND_REPORT
     what: "标记全部流程完成"

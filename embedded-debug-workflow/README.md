@@ -81,29 +81,31 @@ embedded-debug-workflow/
 Skill 激活后，AI 按以下模式驱动引擎（**唯一流程入口**）：
 
 ```
-① 新对话 → 运行引擎 --init 初始化（生成干净的 flow-gate.json 状态 + 扫描配置）
-② 运行引擎 --mode 0 读取当前状态（当前 seq / phase / 待办）
-③ 运行引擎 --mode 1 执行/推进当前步骤：
+① 新对话 → 运行引擎 --init 初始化状态，首先询问工作区工程数量/配置状态与编译下载模式
+② 若配置不存在，按用户确认的项目数量，在工作区 .copilot 下生成全参数占位配置供用户编辑
+③ 运行引擎 --mode 0 读取当前状态（当前 seq / phase / 待办）
+④ 运行引擎 --mode 1 执行/推进当前步骤：
    - 自动步骤（run_script/check_file/...）：引擎直接执行并按 flow.yaml 的
      on_success / on_failure 自动跳转，直到遇到 AI 步骤或完成
    - AI 步骤（ask_user/edit_source/analyze/report/...）：引擎输出指令（status=awaiting_ai），
      AI 执行后提交 --ack success（或 --ack failure）
    - 人工暂停（wait_user）：status=awaiting_user，处理完 --wake 恢复
-④ 重复 ②~③，直至 status=completed
+⑤ 重复 ③~④，直至 status=completed
 ```
 
-> `uv4_path`（`C:\Keil_v5\UV4\UV4.exe`）为固定系统路径，自动填入，不询问用户。
+> 初始化不扫描工作区，也不推断任何参数；Keil、工程、串口与下载器参数全部由用户编辑配置文件。
 > 所有流程逻辑（步骤顺序、跳转、条件）都写在 `flow.yaml`，引擎只是按 `seq` 查表执行。
 
 ### 典型调试流程
 
 ```
-1. AI 读取 embedded-debug-config.json 获取环境参数（无则 --init 自动生成）
-2. STARTUP 阶段（flow.yaml seq 1~3）采集故障现象并确认工程配置
-3. AI 注入 CHESHI 调试宏，自动编译下载（seq 5~8）
-4. AI 抓取串口日志，迭代分析（seq 4 / seq 9）
-5. 定位根因后修复业务代码（seq 11）
-6. 回归验证，输出报告（seq 14~16）
+1. STARTUP 开始先确认工程数量、配置状态和编译下载模式
+2. AI 读取 embedded-debug-config.json 获取环境参数（无则按用户确认的项目数量生成占位配置）
+3. AI 注入 CHESHI 调试宏，自动编译下载并抓取日志（seq 5~9）
+4. AI 分析日志并迭代定位根因（seq 10，必要时回到 seq 6）
+5. 定位根因后先修复业务代码，保留 CHESHI 观测点
+6. 重新编译下载并持续读取串口日志，确认故障彻底解决；失败则退回调试循环
+7. 确认成功后清理 CHESHI，再编译、回归验证并输出报告
 ```
 
 ## 📝 规范要点

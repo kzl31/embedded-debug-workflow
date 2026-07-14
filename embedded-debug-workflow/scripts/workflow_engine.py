@@ -177,6 +177,8 @@ def _default_flow_gate() -> dict:
         "lastUpdated": None,
         "projectInfo": {
             "configFound": False,
+            "initialQuestionsAnswered": False,
+            "projectCount": 0,
             "serialConfirmed": False,
             "hardwareReady": False,
             "faultDescribed": False,
@@ -195,7 +197,8 @@ def _default_flow_gate() -> dict:
             "askCount": 0
         },
         "verifyReport": {
-            "cheshiCleaned": False
+            "cheshiCleaned": False,
+            "fixConfirmed": False
         },
         "debugSession": {
             "startTime": None,
@@ -354,7 +357,7 @@ class WorkflowEngine:
         return self.init(fresh=True)
 
     def init(self, fresh: bool = False) -> dict:
-        """初始化 / 重置流程。同时生成调试配置（幂等）。"""
+        """初始化 / 重置流程；配置生成由 flow.yaml 在初始化提问后触发。"""
         data = _default_flow_gate()
         data["currentSeq"] = 1
         data["currentPhase"] = self.steps[0].get("phase") if self.steps else None
@@ -367,23 +370,6 @@ class WorkflowEngine:
         self.next_seq = None
         self.finished = False
         self.waiting = False
-
-        # 生成调试配置（已存在则跳过）
-        try:
-            try:
-                sys.stdout.reconfigure(encoding="utf-8")
-                sys.stderr.reconfigure(encoding="utf-8")
-            except Exception:
-                pass
-            from config_reader import init_project, find_config_in_project
-            cfg = find_config_in_project(self.project_dir)
-            if cfg:
-                print(f"[init] ℹ️ 配置文件已存在，跳过生成: {cfg}")
-            else:
-                print("[init] 🔧 未检测到配置文件，开始初始化配置（交互式采集）...")
-                init_project(self.project_dir)
-        except Exception as exc:
-            print(f"[init] ⚠️ 配置文件初始化失败: {exc}", file=sys.stderr)
 
         # 预创建日志与报告目录：UV4 / 串口脚本不会自动创建目录，
         # 若目录不存在会直接报"创建文件失败"，导致编译/监听日志无法落盘。
@@ -574,6 +560,11 @@ class WorkflowEngine:
 
     def _exec_subprocess(self, cmd_template: str) -> bool:
         cmd = resolve_path(cmd_template, self.project_dir)
+        cmd = re.sub(
+            r"\{([\w.]+)\}",
+            lambda match: str(self._get_path(match.group(1))),
+            cmd,
+        )
         script_file = self._resolve_script_file(cmd)
         if script_file is None:
             print(f"[exec] ❌ 脚本文件不存在: {cmd}", file=sys.stderr)
