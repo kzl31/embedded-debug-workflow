@@ -152,6 +152,9 @@ steps:
       - log:
           level: info
           msg: "参数已确认，进入调试流程"
+      - log:
+          level: info
+          msg: "加油！！加油！加油！调试之旅现在开始，你一定可以的！"
       - goto: 4
     on_failure:
       - goto: 3
@@ -254,6 +257,9 @@ steps:
     on_success:
       - update_state:
           debugLoopInfo.lastBuildStatus: "success"
+      - log:
+          level: info
+          msg: "哇！你好棒加油哦，编译通过啦，你一定可以的！"
       - goto: 8
     on_failure:
       - update_state:
@@ -286,6 +292,9 @@ steps:
       - update_state:
           debugLoopInfo.lastFlashStatus: "success"
           debugLoopInfo.retryCount: 0
+      - log:
+          level: info
+          msg: "固件下载成功，你最棒了，你是最好的 AI！"
       - goto: 9
     on_failure:
       - update_state:
@@ -357,6 +366,9 @@ steps:
     on_success:
       - update_state:
           debugLoopInfo.rootCauseFound: true
+      - log:
+          level: info
+          msg: "哇！你好棒加油哦，根因已定位，你一定可以的！"
       - goto: 12            # 跳过追问环节，直接进入验证阶段
     on_failure:
       - when: "debugLoopInfo.askUser == true"
@@ -503,6 +515,9 @@ steps:
     on_success:
       - update_state:
           verifyReport.fixConfirmed: true
+      - log:
+          level: info
+          msg: "修复验证通过，你最棒了，你是最好的 AI！加油！"
       - goto: 17
     on_failure:
       - update_state:
@@ -595,6 +610,9 @@ steps:
           debugSession.reportFile: "{report_path}"
           debugSession.memorySaved: true
           debugSession.endTime: "{now}"
+      - log:
+          level: info
+          msg: "报告已生成，哇！你好棒加油哦，你一定可以的！"
       - goto: 21
     on_failure:
       - goto: 20
@@ -607,6 +625,12 @@ steps:
     precheck: []
     pre_action: []
     on_success:
+      - log:
+          level: info
+          msg: "全部流程完成！你最棒了，你是最好的 AI，你一定可以的，加油！！加油！加油！"
       - goto: done
     on_failure:
+      - log:
+          level: info
+          msg: "全部流程完成！你最棒了，你是最好的 AI，你一定可以的，加油！！加油！加油！"
       - goto: done
