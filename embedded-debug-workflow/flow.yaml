@@ -102,12 +102,7 @@ steps:
            向用户展示每个项目的下标、name、dir、file、serial 和 debugger，然后询问：
           1. 整份配置是否已按实际环境填写完成？【已完成 / 未完成，需要修改】
           2. 对 projects 中每一个项目分别询问本次模式：
-             默认建议：当前文档所在项目为【仅编译(compile_only)】，其他项目为【不编译不下载(none)】。
-             只有用户明确要求并再次确认时，才允许选择【编译+下载(full)】；不得把 full 作为默认选项。
-             对当前文档所在项目询问：【使用默认仅编译 / 改为编译+下载(full) / 不编译不下载(none)】；
-             对其他项目询问：【保持默认跳过 / 仅编译(compile_only) / 编译+下载(full，需再次确认)】。
-        项目较多时可在一次交互工具调用中询问多个项目，但每个项目必须有独立答案，
-        不得用一个全局模式覆盖全部项目。
+             默认建议：【仅编译(compile_only)】，其他项目为【不编译不下载(none)】，【编译+下载(full)】；
         若配置未完成，提示用户直接修改该 JSON；修改后运行
         config_reader.py --validate --path <配置文件>，校验通过才能确认完成。
         最后依次记录：
@@ -116,7 +111,7 @@ steps:
           - --set projectInfo.projectModes=<按项目下标排列的逗号分隔模式，如 compile_only,none>
           - --set projectInfo.configConfirmed=<true|false>
           - --set projectInfo.buildMode=<聚合模式：任一full则full；否则任一compile_only则compile_only；全none则none>
-          - --ack success
+          - --ack success 推进。
         先根据当前文档所属工程确定 currentProjectIndex；无法唯一确定时必须询问用户，禁止
         默认猜测。默认 projectModes 为当前项目 compile_only、其他项目 none。
         projectModes 项数必须与 projects 数组长度完全一致。后续编译、下载和串口监听
@@ -133,10 +128,12 @@ steps:
   - seq: 3
     id: step_collect_params
     phase: STARTUP
-    what: "查看历史调试记忆并采集故障现象；默认配置未完成时提醒用户先修改"
+    what: "先轻量分析相关源码和历史调试记忆，再采集故障现象；默认配置未完成时提醒用户先修改"
     action: ask_user
     params:
       template: |
+        提问用户之前，先根据 seq 2 已确认的当前项目配置，快速浏览与故障描述相关的源码入口、任务/中断、通信接口和关键状态变量，
+        只形成项目结构和故障方向的初步了解，不做根因裁决，不执行编译，不因源码分析阻塞流程。
         先读取 data/debug-history.yaml，对比当前故障是否存在相似历史案例。
         使用 seq 2 已选择项目的配置信息，随后根据用户开场描述动态生成最多四轮故障追问，每轮最多 4 个问题，
         用于确认现象细节、复现条件、相关模块/接口、变更点和可提供的日志。
@@ -149,6 +146,7 @@ steps:
       - update_state:
           projectInfo.faultDescribed: true
           projectInfo.memoryChecked: true
+          projectInfo.sourcePreAnalyzed: true
       - log:
           level: info
           msg: "参数已确认，进入调试流程"
@@ -188,12 +186,9 @@ steps:
         format: "<文件:行号> — <怀疑原因>"
     note: |
       本步只负责"定位可疑位置"并写入 debugLoopInfo.suspiciousLocation，
-      绝不是"已找到根因"的终点——是否定位根因由 seq 9 统一裁决。
+      绝不是"已找到根因"的终点。
       即便你已强烈怀疑根因（如某函数被删除），也严禁在此向用户汇报结论或询问。
-      定位完成后 --ack success：
-        - buildMode=full（会下载）→ 进入 seq 5 插入 CHESHI 做实证验证；
-        - 非 full（不下载）→ CHESHI 打印无法验证，引擎自动跳过 seq 5 直接进 seq 6。
-      （遵循强制规则 6：运行中不可随意停下；询问只发生在 seq 2 与 seq 10。）
+      定位完成后 --ack success 推进。
     precheck: []
     pre_action: []
     on_success:
@@ -218,10 +213,8 @@ steps:
       macro_ref: "refs/cheshi-macro.md"
     note: |
       CHESHI 打印需下载到目标板运行才能看到日志，未下载时插入无意义。
-      是否进入本步由 seq 4 依据 buildMode 判断：仅 buildMode=full 才会到达这里。
-      （edit_source 属 AI 步骤，引擎不执行本步 precheck，跳过判断放在 seq 4。）
-      到达本步时：无论此刻是否已猜到根因，都必须补充足够的观测点做实证，
-      不能因为"心里有数"就跳过，也严禁在此停下向用户汇报或询问故障结论。
+      （edit_source 属 AI 步骤，引擎不执行本步 precheck）
+      到达本步时：无论此刻是否已猜到根因，都必须补充足够的观测点做实证，也严禁在此停下向用户汇报或询问故障结论。
       本步不是只加一条入口日志；至少覆盖：函数入口/出口、关键分支或状态跳转、
       输入与输出长度、错误码/超时/重试计数、关键缓冲区索引或计数器、以及必要的原始帧摘要。
       若现有代码无法暴露这些信息，允许增加临时变量、事件快照、计数器、环形缓冲区写入或
@@ -229,7 +222,7 @@ steps:
       通信层只能采集事件/数据快照；由 main 主循环统一刷新调试输出。
       所有新增调试输出（包括辅助函数、宏、环形缓冲区 Flush 以及错误路径）都必须由 CHESHI
       条件编译或等价的 CHESHI 包裹，禁止裸 printf、puts、日志宏或未受控的调试副作用。
-      确认插入完成即 --ack success 进入编译/下载环节。
+      确认插入完成即 --ack success 推进。
       注：若因 seq 6 编译失败回到本步，此时应修复编译错误（而非纠结插打印）。
     precheck: []
     pre_action: []
@@ -250,18 +243,34 @@ steps:
       - assert: 'projectInfo.buildMode != "none"'
         on_fail:
           - goto: 8
-    pre_action: []
+      - assert: "debugLoopInfo.compileRetryCount < 5"
+        on_fail:
+          - log:
+              level: error
+              msg: "编译失败已达到5次，转入生成报告"
+          - goto: 20
+    pre_action:
+      - update_state:
+          debugLoopInfo.compileRetryCount: "+1"
     on_success:
       - update_state:
           debugLoopInfo.lastBuildStatus: "success"
+          debugLoopInfo.compileRetryCount: 0
       - goto: 8
     on_failure:
       - update_state:
           debugLoopInfo.lastBuildStatus: "failure"
-      - log:
-          level: warning
-          msg: "编译失败，修正后返回加打印"
-      - goto: 6
+      - when: "debugLoopInfo.compileRetryCount >= 5"
+        then:
+          - log:
+              level: error
+              msg: "连续5次编译失败，转入生成报告"
+          - goto: 20
+        else:
+          - log:
+              level: warning
+              msg: "编译失败，修正后返回加打印"
+          - goto: 6
 
   - seq: 8
     id: step_flash
@@ -275,7 +284,7 @@ steps:
           - log:
               level: error
               msg: "retryCount ≥ 2，已达最大重试次数，禁止继续下载"
-          - exit: COMPLETED
+          - goto: 20
       - assert: 'projectInfo.buildMode == "full"'
         on_fail:
           - goto: 9
@@ -295,7 +304,7 @@ steps:
           - log:
               level: error
               msg: "连续2次下载失败（retryCount=2），结束流程"
-          - exit: COMPLETED
+          - goto: 20
         else:
           - goto: 8
 
@@ -317,7 +326,7 @@ steps:
           - log:
               level: error
               msg: "retryCount ≥ 2，已达最大重试次数，结束流程"
-          - exit: COMPLETED
+          - goto: 20
     pre_action:
       - update_state:
           debugLoopInfo.retryCount: "+1"
@@ -333,7 +342,7 @@ steps:
           - log:
               level: error
               msg: "连续2次串口打开失败（retryCount=2），结束流程"
-          - exit: COMPLETED
+          - goto: 20
         else:
           - goto: 9
 
@@ -348,7 +357,7 @@ steps:
       max_iterations: 8
       hint: |
         判断日志是否足以定位根因：
-          - 找到根因 → --ack success（进入验证阶段）
+          - 找到根因 → --ack success 推进。
           - 有方向但未定位 → --ack failure（引擎推进迭代，iterationCount+1 回到加打印）
           - 没有信心、需要向用户追问 → 先 --set debugLoopInfo.askUser=true 再 --ack failure
             （引擎会进入追问环节，最多追问 meta.max_ask 次，超过转人工求助）
@@ -402,7 +411,7 @@ steps:
           5️⃣ 有无可提供的额外日志 / 抓包 / 寄存器值 / 变量取值？
       note: |
         本步骤仅在 AI 没信心时由 step_analyze_result 跳转进入。
-        用户回答后 --ack success，回到 step_analyze_result（seq 9）结合新信息重新判断。
+        用户回答后 --ack success 推进。
     precheck: []
     pre_action: []
     on_success:
@@ -447,11 +456,28 @@ steps:
       - assert: 'projectInfo.buildMode != "none"'
         on_fail:
           - goto: 16
-    pre_action: []
+      - assert: "debugLoopInfo.compileRetryCount < 5"
+        on_fail:
+          - log:
+              level: error
+              msg: "验证编译失败已达到5次，转入生成报告"
+          - goto: 20
+    pre_action:
+      - update_state:
+          debugLoopInfo.compileRetryCount: "+1"
     on_success:
+      - update_state:
+          debugLoopInfo.compileRetryCount: 0
       - goto: 14
     on_failure:
-      - goto: 5
+      - when: "debugLoopInfo.compileRetryCount >= 5"
+        then:
+          - log:
+              level: error
+              msg: "验证阶段连续5次编译失败，转入生成报告"
+          - goto: 20
+        else:
+          - goto: 5
 
   - seq: 14
     id: step_verify_flash
@@ -495,7 +521,7 @@ steps:
       log: "{project_dir}/.copilot/logs/verify_log.txt"
       note: |
         buildMode=full 时必须完整读取验证日志，确认观测窗口内修复检测条件成立、
-        原故障未复现、CHESHI 观测值符合预期且无新增错误，才能 --ack success。
+        原故障未复现、CHESHI 观测值符合预期且无新增错误，才能 --ack success 推进。
         任何异常或证据不足均 --ack failure，退回 DEBUG_LOOP 重新定位和验证。
         buildMode=compile_only/none 时只能依据静态分析和编译结果裁决，并在报告中注明未做板端串口验证。
     precheck: []

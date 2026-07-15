@@ -1,7 +1,7 @@
 ---
 name: embedded-debug-workflow
 description: >-
-  嵌入式固件调试自动化工作流。用于 Keil MDK 工程编译烧录、串口日志抓取分析、CHESHI 调试宏迭代注入、Git 本地版本管理、故障定位与代码修复、标准化报告输出。检测到 .uvprojx/.uvproj/main.c 或用户描述故障现象时自动激活。
+  嵌入式固件调试自动化工作流。用于 Keil MDK 工程串口日志抓取分析、CHESHI 调试宏迭代注入、故障定位与代码修复。检测到 .uvprojx/.uvproj/main.c 或用户描述故障现象时自动激活。
 argument-hint: '描述故障现象 / 输入 debug help 查看帮助'
 ---
 

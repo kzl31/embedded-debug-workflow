@@ -178,6 +178,7 @@ def _default_flow_gate() -> dict:
         "projectInfo": {
             "configFound": False,
             "initialQuestionsAnswered": False,
+            "sourcePreAnalyzed": False,
             "projectCount": 2,
             "projectModes": "none,none",
             "serialConfirmed": False,
@@ -188,6 +189,7 @@ def _default_flow_gate() -> dict:
         },
         "debugLoopInfo": {
             "iterationCount": 0,
+            "compileRetryCount": 0,
             "cheshiAdded": False,
             "lastBuildStatus": None,
             "lastFlashStatus": None,
