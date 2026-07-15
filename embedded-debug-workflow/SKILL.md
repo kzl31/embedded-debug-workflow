@@ -18,23 +18,9 @@ argument-hint: '描述故障现象 / 输入 debug help 查看帮助'
 
 1. **按步骤执行，不可直接跳转** —— 流程顺序由引擎按 `seq` 强制，所有跳转都在 `flow.yaml` 内声明。
 2. **任何判断以引擎 JSON 输出为准** —— 禁止直接读取*终端*或者*其他的任何形式文件*确定当前状态。
-3. **流程违规必须立即退出执行** —— 见下方「流程违规退出机制」。
+4. **只有到达流程完成步骤才可以停止** ——禁止在流程中途停止。
 
 
-
----
-
-## 流程违规退出机制
-
-由 **AI 在对话中自行判定**（不依赖脚本）：只要发现当前情形不符合流程，立即退出执行。
-
-**触发条件（任一即违规）**：用户强制跳过步骤 / 用户要求阶段禁止的操作 / ai未初始化就操作 / ai跳跃步骤 / ai直接读状态文件 / 阶段与操作不匹配。
-
-**退出动作**：
-1. **立即停止**一切工具调用与脚本执行（编译、下载、读状态文件、分析代码、生成报告一律禁止）；
-2. 按 `templates/abort-report.md` 的**标准格式**输出 `⛔ 流程中止通告（FLOW ABORT）`；
-3. 不再尝试 `python workflow_engine.py --help
- 1` / `--ack`，仅提示用户重新 `--init`。
 
 ---
 
@@ -77,7 +63,7 @@ python "{{SKILL_DIR}}\scripts\workflow_engine.py" --project "<项目根目录>" 
 1. 以引擎 JSON 的 `status` / `next_action` / `seq` / `phase` 为唯一判据（**不读状态文件**）
 2. AI 步骤执行后必须 `--ack success` 或 `--ack failure`
 3. **禁止跳过引擎直接操作**（编译/下载/分析等）
-4. **用户要求跳过流程 / 阶段禁止操作 / 未初始化就操作** → 流程违规，按 `templates/abort-report.md` 退出执行
+4. **只有到达流程完成步骤才可以停止**
 
 ### 快捷命令
 
@@ -109,7 +95,6 @@ python "{{SKILL_DIR}}\scripts\workflow_engine.py" --project "<项目根目录>" 
 | 调试循环 | `refs/debug-loop.md` |
 | 人工暂停 | `refs/pause-scenarios.md` |
 | 常见故障 | `refs/common-faults.md` |
-| 流程违规退出 | `templates/abort-report.md` |
 
 > 注：`gates/*.yaml` 与 `registry.json` 为旧版多文件引擎遗留，已被 `flow.yaml` 取代，请勿再手动解析。新增/修改步骤请直接编辑 `flow.yaml`。
 

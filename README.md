@@ -62,7 +62,6 @@ embedded-debug-workflow/
 ├── templates/             # 模板文件
 │   ├── checklist.md       #   迭代检查清单（含验证方法与常见问题速查）
 │   ├── report.md          #   故障报告模板
-│   ├── abort-report.md    #   🛑 流程违规退出标准格式
 │   ├── flow-gate.json     #   状态文件模板（currentSeq 等）
 │   └── cheshi_snippet.c   #   CHESHI 宏代码模板
 └── data/                  # 运行时数据（自动生成）
@@ -121,16 +120,6 @@ Skill 激活后，AI 按以下模式驱动引擎（**唯一流程入口**）：
 - **8 轮上限**：自动加打印满 8 轮仍无法定位 → 触发人工求助（`wait_user`）
 - **三类暂停**：设备断电重启 / Keil 断点调试 / 迭代上限求助
 
-## 🛑 流程违规退出
-
-由 **AI 在对话中自行判定**：只要发现当前情形不符合流程（用户强制跳过步骤、要求阶段禁止的操作、
-未初始化就操作、跳跃步骤、直接读状态文件等），AI 必须**立即退出执行**，并输出标准格式中止通告。
-
-- **判定方是 AI 自己，不依赖脚本**：AI 在对话中识别违规情形（含用户要求跳过流程），随即停止一切后续动作。
-- **违规即退出执行**：AI 立即停止编译/下载/分析/读状态文件/报告等所有操作，按 `templates/abort-report.md`
-  的**标准格式**输出 `⛔ 流程中止通告（FLOW ABORT）`，等待用户重新 `--init`。
-- 违规类型（AI 据情形自行选填）：`user_skip_step` / `user_forbidden_op` / `not_initialized` /
-  `out_of_order` / `read_state_file` / `phase_mismatch`。
 
 ## 📄 报告模板
 

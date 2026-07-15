@@ -4,214 +4,140 @@
 
 <p align="center">
   <a href="README.md"><strong>🇨🇳 中文 README</strong></a>
-</p>   
+</p>
 
-## Overview
+## 📖 Overview
 
-This skill defines an end-to-end embedded firmware debugging workflow, covering the complete process from issue discovery to a standardized debugging report:
+This skill defines a complete automated embedded firmware debugging workflow, covering the entire chain from issue discovery to standardized report output:
 
 ```text
-Issue discovery -> Fault classification -> CHESHI instrumentation iterations
--> Automated build and flash -> Serial log analysis -> Business logic fix
--> Regression verification -> Standardized report
+Issue discovery → Fault classification → CHESHI instrumentation iterations → Automated build and flash
+→ Serial log analysis → Business code fix → Regression verification → Standardized report
 ```
 
-The workflow definition is centralized in [`flow.yaml`](flow.yaml), which contains a globally numbered linear step table. The [`workflow_engine.py`](scripts/workflow_engine.py) engine performs table lookup and sequence transitions without hard-coding individual workflow steps.
+The workflow definition is centralized in the single file **`flow.yaml`** (a linearly numbered step table). The engine `workflow_engine.py` is a zero-hardcoded pure table-lookup + sequence-jump resolver.
 
-## Use Cases
+## 🎯 Use Cases
 
-| Scenario | Examples |
+| Scenario | Description |
 |:---|:---|
-| Wired protocol failures | Modbus, CAN, SPI, or TTL communication faults |
-| Data parsing errors | Invalid lengths, offsets, or CRC checks |
-| State-machine failures | Stalled states or incorrect transitions |
-| Peripheral driver issues | Flash or sensor read timeouts |
+| Wired communication protocol faults | Modbus / CAN / SPI / TTL communication failures |
+| Data parsing errors | Invalid length / offset / CRC checks |
+| State-machine anomalies | Stuck states, incorrect transition logic |
+| Basic peripheral driver issues | Flash / sensor read timeouts |
 
-## Repository Structure
+## 📁 Repository Structure
 
 ```text
 embedded-debug-workflow/
-|-- README.md                    # Chinese documentation
-|-- README_EN.md                 # English documentation
-|-- SKILL.md                     # Agent entry point and mandatory rules
-|-- flow.yaml                    # Single source of truth for workflow steps
-|-- commands/                    # /kzl command definitions
-|   |-- help.md
-|   |-- init.md
-|   |-- build.md
-|   `-- add-flow.md
-|-- scripts/
-|   |-- config_reader.py         # Configuration management
-|   |-- keil_build.py            # Single-project Keil build
-|   |-- keil_flash.py            # Single-project firmware flash
-|   |-- build_and_flash.py       # Single-project build and flash
-|   |-- multi_project_runner.py  # Per-project build/flash/serial modes
-|   |-- serial_read.py           # One-shot serial capture
-|   |-- serial_monitor.py        # Continuous serial monitoring
-|   |-- batch_build.py           # Batch project operations
-|   `-- workflow_engine.py       # Sequence-driven workflow engine
-|-- refs/                        # Detailed rules and references
-|-- templates/                   # Reports, checklists, and code templates
-`-- data/
-    `-- debug-history.yaml       # Debug history index
+├── README.md              # Chinese documentation
+├── README_EN.md           # English documentation (this file)
+├── SKILL.md               # AI core entry (hard rules + engine invocation + flow.yaml quick reference)
+├── flow.yaml              # 🔑 Single source of truth for the workflow (linear numbered steps, with phase grouping)
+├── commands/              # /kzl command entry points
+│   ├── help.md            #   /kzl help
+│   ├── init.md            #   /kzl init (initialize configuration)
+│   ├── build.md           #   /kzl build (compile only) / /kzl build-flash (build + flash)
+│   └── add-flow.md        #   /kzl add-flow (add step/phase → edit flow.yaml)
+├── scripts/               # Python automation scripts
+│   ├── config_reader.py   #   Config read/write (Python)
+│   ├── keil_build.py      #   Keil build (Python)
+│   ├── keil_flash.py      #   Firmware flash (Python)
+│   ├── build_and_flash.py #   One-click build + flash (Python)
+│   ├── serial_read.py     #   One-shot serial read (Python)
+│   ├── serial_monitor.py  #   Continuous serial monitoring (Python)
+│   ├── batch_build.py     #   Batch operations across projects (Python)
+│   ├── multi_project_runner.py # Per-project build/flash/serial by mode
+│   └── workflow_engine.py #   🔑 Workflow engine (table lookup + sequence jump, zero hardcoded steps)
+├── refs/                  # Detailed specs loaded by AI on demand
+│   ├── core-rules.md      #   Mandatory rules (AI behavior constraints)
+│   ├── script-commands.md #   Script command reference
+│   ├── config-format.md   #   Config file format
+│   ├── debug-loop.md      #   Core debug loop (8-iteration)
+│   ├── git-rules.md       #   Git local version management
+│   ├── cheshi-macro.md    #   CHESHI macro spec (incl. ISR-safe printing)
+│   ├── pause-scenarios.md #   Manual pause spec
+│   ├── common-faults.md   #   Common faults quick lookup & JLink/Map analysis
+│   ├── add-flow-guide.md  #   Add step/phase guide (edit flow.yaml)
+│   └── workflow-diagram.md#   Full workflow diagram (interactive + sequence)
+├── templates/             # Templates
+│   ├── checklist.md       #   Iteration checklist (with verification & FAQ)
+│   ├── report.md          #   Fault report template
+│   ├── flow-gate.json     #   State file template (currentSeq, etc.)
+│   └── cheshi_snippet.c   #   CHESHI macro code template
+└── data/                  # Runtime data (auto-generated)
+    └── debug-history.yaml #   Debug history index
 ```
 
-## Requirements
+## 🔧 Requirements
 
-| Dependency | Purpose |
+| Dependency | Description |
 |:---|:---|
-| Python 3.8+ | Runs the automation scripts |
-| PyYAML | Parses `flow.yaml` (`pip install pyyaml`) |
-| pyserial | Captures serial output (`pip install pyserial`) |
-| Keil MDK | ARM firmware build environment |
-| J-Link or ST-Link | Firmware programming and debugging |
+| **Python 3.8+** | Runs the Python automation scripts (recommended) |
+| **pyserial** | Serial communication (`pip install pyserial`) |
+| **PyYAML** | Parses `flow.yaml` (`pip install pyyaml`) |
+| **Keil MDK** | ARM build environment (UV4.exe, fixed path `C:\Keil_v5\UV4\UV4.exe`) |
+| **J-Link / ST-Link** | Debugger / programmer |
 
-The default Keil executable path is:
+## 🚀 Quick Start
+
+### Startup / initialization flow
+
+Once the skill is activated, the AI drives the engine in the following pattern (**the only workflow entry point**):
 
 ```text
-C:\Keil_v5\UV4\UV4.exe
+① New conversation → run engine --init to initialize state, without asking the user
+② If config is missing, generate two project configs with generic defaults under workspace .copilot
+③ Read the actual projects array from config; ask per-project execution mode (build+flash / compile-only / none)
+④ Run engine --mode 0 to read current state (current seq / phase / todo)
+⑤ Run engine --mode 1 to execute/advance the current step:
+   - Auto steps (run_script/check_file/...): engine executes directly and jumps per on_success/on_failure
+     until it hits an AI step or completion
+   - AI steps (ask_user/edit_source/analyze/report/...): engine outputs an instruction (status=awaiting_ai);
+     after the AI acts, submit --ack success (or --ack failure)
+   - Manual pause (wait_user): status=awaiting_user; after handling, --wake to resume
+⑥ Repeat ④~⑤ until status=completed
 ```
 
-It can be changed in `.copilot/embedded-debug-config.json`.
-
-## Quick Start
-
-### 1. Initialize the workflow
+Common commands:
 
 ```powershell
+# ① initialize state (no prompt)
 python scripts/workflow_engine.py --init --project "<workspace>"
-```
 
-Initialization creates the workflow state. If the workspace configuration does not exist, the workflow generates a two-project template at:
+# ④ read current state (seq / phase / todo)
+python scripts/workflow_engine.py --project "<workspace>" --mode 0
 
-```text
-<workspace>/.copilot/embedded-debug-config.json
-```
-
-Initialization does not scan the workspace for project files. Edit the generated configuration and provide the actual project paths, Keil project files, serial ports, and debugger settings.
-
-### 2. Run the current workflow step
-
-```powershell
+# ⑤ execute / advance current step
 python scripts/workflow_engine.py --project "<workspace>" --mode 1
-```
 
-The engine returns one of the following states:
-
-- `awaiting_ai`: the agent must perform an analysis, edit, question, report, or regression step.
-- `auto_pending`: the engine executed an automated step and advanced the workflow.
-- `awaiting_user`: manual action is required before continuing with `--wake`.
-- `completed`: the workflow has finished.
-
-After completing an AI-owned step, acknowledge the result:
-
-```powershell
+# after an AI step, submit the result
 python scripts/workflow_engine.py --project "<workspace>" --ack success
 python scripts/workflow_engine.py --project "<workspace>" --ack failure
 ```
 
-## Multi-Project Configuration
+> Initialization does not scan the workspace; it generates generic defaults for Keil, serial, and debugger. Project paths and actual ports are edited by the user in the config file.
+> All workflow logic (step order, jumps, conditions) lives in `flow.yaml`; the engine merely executes by looking up `seq`.
 
-The `projects` array in `embedded-debug-config.json` is the authoritative project list. Users may add, remove, or reorder entries. The runtime does not rely on `project_count` to determine how many projects exist.
+### Typical debugging flow
 
-Example:
-
-```json
-{
-  "keil": {
-    "uv4_path": "C:\\Keil_v5\\UV4\\UV4.exe"
-  },
-  "projects": [
-    {
-      "name": "controller",
-      "dir": "E:\\firmware\\controller\\MDK-ARM",
-      "file": "controller.uvprojx",
-      "serial": {
-        "port": "COM19",
-        "baud": 256000,
-        "data_bits": 8,
-        "stop_bits": 1,
-        "parity": "None"
-      },
-      "debugger": {
-        "type": "JLink",
-        "com": "COM9"
-      }
-    }
-  ]
-}
+```text
+1. STARTUP auto-ensures the dual-project default config exists, with no prompting throughout
+2. AI reads embedded-debug-config.json, takes the projects array as the sole project list, and asks per-project mode
+3. AI injects the CHESHI debug macro, auto build+flash and captures logs (seq 5~9)
+4. AI analyzes logs and iteratively locates the root cause (seq 10, return to seq 6 if needed)
+5. After locating the root cause, fix the business code first while keeping CHESHI observation points
+6. Rebuild, flash, and continuously read serial logs to confirm the fault is fully resolved; on failure return to the debug loop
+7. After confirmation, clean up CHESHI, then build, run regression verification, and output the report
 ```
 
-Each project receives an independent execution mode:
+## 📝 Key Conventions
 
-| Mode | Behavior |
-|:---|:---|
-| `full` | Build, flash, and monitor serial output |
-| `compile_only` | Build only |
-| `none` | Skip the project |
+- **CHESHI macro**: bitmask or numeric levels; all debug content must be wrapped by CHESHI. Communication layers only capture snapshots; the `main` loop outputs uniformly; delete the whole block when debugging ends.
+- **Git control**: local operations only, `git push` is forbidden; debug branch naming `debug/<fault-brief>_YYYYMMDD`.
+- **8-iteration limit**: after 8 rounds of auto-instrumentation still unable to locate the fault → trigger human assistance (`wait_user`).
+- **Three types of pause**: device power-cycle restart / Keil breakpoint debugging / iteration-limit assistance.
 
-The default recommendation is to compile only the project associated with the current source file and skip all other projects. Flashing requires explicit user confirmation and must never be selected as the implicit default.
+## 📄 Report Template
 
-## Single-Project Commands
-
-The single-project scripts retain index `0` as their CLI default. In a multi-project workspace, callers should always pass the selected project index explicitly:
-
-```powershell
-# Build project 1 only
-python scripts/keil_build.py --config-dir "<workspace>" --project-index 1
-
-# Flash project 1 only
-python scripts/keil_flash.py --config-dir "<workspace>" --project-index 1
-
-# Build and flash project 1
-python scripts/build_and_flash.py --config-dir "<workspace>" --project-index 1
-```
-
-## Typical Debugging Flow
-
-1. Ensure the workspace configuration exists.
-2. Read the actual `projects` array and choose an independent execution mode for every project.
-3. Locate suspicious source code and insert CHESHI-controlled observations.
-4. Build, flash, and capture serial logs according to each project's mode.
-5. Iterate until the evidence identifies a root cause.
-6. Fix the business logic and add falsifiable temporary verification observations.
-7. Rebuild, flash, and verify the fix from serial evidence.
-8. Remove all CHESHI instrumentation and temporary verification code.
-9. Rebuild, run regression checks, and generate the final report.
-
-## CHESHI Instrumentation Rules
-
-- `CHESHI` is the only temporary debugging switch.
-- Every added debug print, helper, capture buffer, flush path, and temporary verification check must be wrapped by CHESHI conditional compilation.
-- Communication layers, ISRs, DMA callbacks, and protocol callbacks must not call `printf` directly.
-- Timing-sensitive code should only capture compact event or data snapshots.
-- Formatting and output must be performed from the `main` loop through a function such as `Debug_Flush()`.
-- Instrumentation should cover function entry and exit, important branches, state transitions, lengths, indexes, errors, timeouts, retries, counters, and required frame summaries.
-- Once the fix is verified, remove the CHESHI definition, snapshots, buffers, flush calls, prints, and temporary verification checks as one complete block.
-
-See [`refs/cheshi-macro.md`](refs/cheshi-macro.md) for the complete specification.
-
-## Workflow Limits and Safety Rules
-
-- The workflow allows up to eight instrumentation iterations before requesting human assistance.
-- Build, flash, analysis, and reporting operations must follow the sequence defined in `flow.yaml`.
-- A successful build or flash is not proof that the bug is fixed. Verification must use evidence directly related to the root cause.
-- The workflow must distinguish between "the fault did not occur during this run" and "the conditions that caused the fault have been eliminated."
-- Temporary debugging code and permanent business logic fixes must remain separable.
-
-## Reports
-
-After verification, the workflow generates a Markdown report containing:
-
-- Fault description
-- Root cause
-- Fix summary
-- Changed files
-- Verification logs
-- Regression result
-
-Reports and serial logs are stored under the target workspace's `.copilot` directory.
-
-## License
-
-Add a license file before publishing or redistributing the repository if you want to define explicit reuse terms.
+After the fault is resolved, a standardized report is automatically generated, containing: fault description, root cause analysis, changed-files list, verification results, and impact scope.
