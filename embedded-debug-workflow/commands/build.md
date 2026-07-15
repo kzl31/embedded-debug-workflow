@@ -1,110 +1,71 @@
-# /kzl 编译 || /kzl 编译下载 — 编译 / 编译+下载固件
+# /kzl 编译 || /kzl 编译下载 — 独立编译命令
 
-> 本命令处理两类触发：
->   - `/kzl 编译`  / `/kzl 编译`      → **仅编译**（不下载固件）
->   - `/kzl 编译下载` / `/kzl 编译下载` → 编译 + 下载固件
->   （兼容旧别名：`/kzl build` 等效 `/kzl 编译xz`）
+> 本命令处理：
+> - `/kzl 编译` / `/kzl build`：仅编译，不下载。
+> - `/kzl 编译下载` / `/kzl build-flash`：编译成功后下载。
 >
-> 功能：先（按需）修改代码，再执行编译；`byxz` 额外下载固件到设备。
-> **两个命令都必须已初始化**，未初始化即判定流程违规。
+> 这是独立快捷命令，不启动、不初始化、不检查、不推进工作流引擎；直接调用 Python 脚本。
 
 ---
 
 ## 执行步骤
 
-### ⛔ 前置：引擎预检 / 流程门禁（必须已初始化）
+### Step 1: 确定工作区与配置
 
 ```yaml
-action: engine_precheck
-说明: 按 SKILL.md 的流程门禁纪律执行：先 --init（新对话），再 --mode 0 确认当前步骤与阶段允许编译/下载
+action: check_file
+path: "{workspace_dir}/.copilot/embedded-debug-config.json"
+规则:
+  - workspace_dir 默认取当前 VS Code 工作区根目录
+  - 多根工作区优先取当前活动文件所属工作区
+  - 只检查配置文件是否存在，禁止调用 workflow_engine.py
+  - 禁止自动调用 config_reader.py --init
+on_failure:
+  stop: true
+  message: "尚未初始化，请先执行 /kzl 初始化"
 ```
 
-### Step 1: 确认需求与范围
+### Step 2: 确定目标工程
 
 ```yaml
-action: ask_user
-question: |
-  本次目标确认：
-  1) 要改哪些代码？（若代码已改好，只想编译/下载，直接回车跳过）
-  2) 是否下载固件？（/kzl 编译 默认不下载，/kzl 编译xz 默认下载；与默认不同请说明）
-说明: 改代码为可选步骤；下载与否由命令类型（by / byxz）或用户明确说明决定
+action: select_project
+规则:
+  - projects 仅有一个：直接使用 project-index 0
+  - projects 有多个：优先匹配当前活动文件所在目录与 projects[*].dir
+  - 无法唯一匹配：列出项目名称，让用户选择
+  - 不修改配置，不改变流程状态
 ```
 
-### Step 2: 分析设计（仅当要改代码时执行）
-
-```yaml
-action: analyze
-条件: 用户在 Step 1 中提供了要改的代码需求
-遵守规范: 本 skill 的强制规则（refs/core-rules.md）
-  - 规则2: Git 版本管控 — 修改前先 git commit 当前状态
-  - 规则3: CHESHI 宏规范 — 如需加调试打印，统一用 CHESHI 宏
-动作: 通读相关源文件、理清逻辑、设计修改方案、覆盖边界情况
-```
-
-### Step 3: Git 快照（仅当要改代码时执行）
-
-```yaml
-action: git_commit
-条件: 用户在 Step 1 中提供了要改的代码需求
-message: "temp: 修改前快照 — {description}"
-说明: 修改代码前先提交当前状态，方便回退
-```
-
-### Step 4: 修改代码（仅当要改代码时执行）
-
-```yaml
-action: edit_code
-条件: 用户在 Step 1 中提供了要改的代码需求
-说明: 按设计方案修改代码，确保功能完整实现
-```
-
-### Step 5: 读取配置
-
-```yaml
-action: read_config
-说明: 读取项目 .copilot/embedded-debug-config.json，获取工程路径和 UV4 路径
-```
-
-### Step 6: 编译 [+ 下载]
+### Step 3: 直接调用脚本
 
 ```yaml
 action: run_script
-说明: |
-  根据命令类型调用对应脚本（编译用独立 keil_build.py，下载用 keil_flash.py）：
-
-  - /kzl 编译（仅编译当前文档所属项目）：
-    python "{skill_dir}/scripts/keil_build.py" --config-dir "{project_dir}" --project-index "{current_project_index}"
-
-  - /kzl 编译下载（仅在用户明确确认后执行当前项目）：
-    python "{skill_dir}/scripts/build_and_flash.py" --config-dir "{project_dir}" --project-index "{current_project_index}"
-
-  默认针对当前文档所属项目执行增量编译（仅编译修改过的文件，速度快），其他项目默认跳过。
-  只有用户明确选择并确认 `full` 模式时，才执行编译后下载；不要将完整编译下载作为默认动作。
-  成功后（byxz）自动下载。
-  以下情况需使用 --rebuild（全编译）：
-  - 修改了 .uvprojx/.uvproj 工程配置
-  - 新增或修改了 CHESHI 宏定义
-  - 增量编译报错提示需 clean/rebuild
-  如遇上述情况，AI 应询问用户是否接受全编译耗时。
+commands:
+  /kzl 编译: >-
+    python "{skill_dir}/scripts/keil_build.py"
+    --config-dir "{workspace_dir}"
+    --project-index "{current_project_index}"
+  /kzl 编译下载: >-
+    python "{skill_dir}/scripts/build_and_flash.py"
+    --config-dir "{workspace_dir}"
+    --project-index "{current_project_index}"
+规则:
+  - 默认增量编译
+  - 用户明确要求全量编译时追加 --rebuild
+  - 不调用 workflow_engine.py，不执行 --init/--mode/--ack
 ```
 
-### Step 7: 检查结果
+### Step 4: 报告脚本结果
 
 ```yaml
 action: check_output
-# /kzl 编译（仅编译）
-keywords_by: ["0 Error", "0 Warning"]
-on_success_by: ✅ 编译完成
-# /kzl 编译下载（编译+下载）
-keywords_byxz: ["0 Error", "0 Warning", "Flash Load finished", "下载成功"]
-on_success_byxz: ✅ 编译下载完成
-on_failure: ⚠️ 编译或下载出错，请检查输出日志
+编译成功: 脚本退出码为 0 且输出编译成功
+编译下载成功: 脚本退出码为 0 且输出编译和下载均成功
+on_failure: 原样概括错误，不自动进入调试流程
 ```
 
 ---
 
 ## 完成后
 
-告知用户本次结果（编译成功/失败；byxz 额外说明下载成功/失败），无需进入调试循环。
-
-> 未初始化就执行命令 → 流程违规，立即停止，并输出中止通告。
+只报告目标工程、编译结果，以及下载结果（若有）；随后停止，不推进工作流。

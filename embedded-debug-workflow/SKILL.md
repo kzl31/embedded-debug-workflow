@@ -28,6 +28,7 @@ argument-hint: '描述故障现象 / 输入 debug help 查看帮助'
 
 ### 第一步：检查是否已初始化（任何操作前必做，不可跳过）
 
+- 本节只适用于用户进入嵌入式调试**流程**，不适用于下方 `/kzl` 独立快捷命令。
 - 如果**无可见对话历史** 或者对话中没有 **--init**或者你不确定有没有 **--init** --→ 必须 `--init`
 - 启动预检细节见 `refs/core-rules.md` 规则 1
 
@@ -73,9 +74,12 @@ python "{{SKILL_DIR}}\scripts\workflow_engine.py" --project "<项目根目录>" 
 | `/kzl 初始化 [目录]` | 初始化配置 → 读 `commands/init.md` |
 | `/kzl 编译` | 仅编译（不下载）→ 读 `commands/build.md` |
 | `/kzl 编译下载` | 编译+下载 → 读 `commands/build.md` |
+| `/kzl 打印 <要求>` | 按 CHESHI 规范添加调试打印 → 读 `commands/print.md` |
 | `/kzl 新增流程` | 新增步骤/阶段 → 读 `commands/add-flow.md` |
 
-> `/kzl` 命令也必须先跑引擎，由 `flow.yaml` 的当前 `seq` 决定阶段是否允许。
+> **命令与流程严格分离**：识别到上表命令后，直接读取对应 `commands/*.md` 执行并停止，
+> 不得先运行 `workflow_engine.py`，不得初始化或推进流程。命令可为流程准备配置、打印和固件，
+> 但不受 `flow.yaml` 当前 `seq` 约束。`/klz 打印` 作为 `/kzl 打印` 的兼容拼写处理。
 
 ---
 

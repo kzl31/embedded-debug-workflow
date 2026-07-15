@@ -6,13 +6,13 @@
   "projectInfo": {
     "configFound": false,
     "initialQuestionsAnswered": false,
-    "projectCount": 2,
-    "projectModes": "none,none",
+    "projectCount": 0,
+    "projectModes": "",
     "serialConfirmed": false,
     "hardwareReady": false,
     "faultDescribed": false,
     "configConfirmed": false,
-    "buildMode": "full"
+    "buildMode": "none"
   },
   "debugLoopInfo": {
     "iterationCount": 0,

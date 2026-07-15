@@ -179,13 +179,13 @@ def _default_flow_gate() -> dict:
             "configFound": False,
             "initialQuestionsAnswered": False,
             "sourcePreAnalyzed": False,
-            "projectCount": 2,
-            "projectModes": "none,none",
+            "projectCount": 0,
+            "projectModes": "",
             "serialConfirmed": False,
             "hardwareReady": False,
             "faultDescribed": False,
             "configConfirmed": False,
-            "buildMode": "full"
+            "buildMode": "none"
         },
         "debugLoopInfo": {
             "iterationCount": 0,
@@ -360,7 +360,7 @@ class WorkflowEngine:
         return self.init(fresh=True)
 
     def init(self, fresh: bool = False) -> dict:
-        """初始化 / 重置流程；配置生成由 flow.yaml 在初始化提问后触发。"""
+        """初始化 / 重置流程；配置缺失时由 flow.yaml 第 1 步按工作区工程生成。"""
         data = _default_flow_gate()
         data["currentSeq"] = 1
         data["currentPhase"] = self.steps[0].get("phase") if self.steps else None

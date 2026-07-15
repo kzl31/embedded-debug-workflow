@@ -2,7 +2,7 @@
 """嵌入式调试 Skill 通用配置文件读写器。
 
 核心职责：
-    1. `--init <目录> --project-count N` — 按指定项目数量生成可编辑默认配置
+    1. `--init <目录>` — 扫描工作区内的 Keil 工程并生成默认配置
   2. `--read/--validate` — 读取/校验配置
   3. 作为模块导入：load_config(config_dir) / save_config(data, config_dir)
 
@@ -245,29 +245,47 @@ def _ensure_project(config: dict, index: int) -> dict:
 
 # ── 启动初始化（核心） ────────────────────────────────────────────────
 
-def init_project(workspace_dir: str, project_count: int) -> dict[str, Any]:
-    """按指定项目数量生成无交互默认配置。"""
-    if project_count < 1:
-        raise ValueError("project_count 必须大于等于 1")
+def _discover_keil_projects(root: Path) -> list[Path]:
+    """递归查找工作区中的 Keil 工程文件，优先采用 .uvprojx。"""
+    ignored_dirs = {".git", ".copilot", "__pycache__", "node_modules"}
+    candidates = [
+        path for pattern in ("*.uvprojx", "*.uvproj")
+        for path in root.rglob(pattern)
+        if not any(part.lower() in ignored_dirs for part in path.relative_to(root).parts)
+    ]
+    return sorted(candidates, key=lambda path: (path.suffix.lower() != ".uvprojx", str(path).lower()))
 
+
+def init_project(workspace_dir: str, project_count: int | None = None) -> dict[str, Any]:
+    """根据工作区中的实际 Keil 工程生成无交互默认配置。"""
     root = Path(workspace_dir).resolve()
+    config_path = root / ".copilot" / CONFIG_FILENAME
     print("=" * 50)
     print(f"🔧 嵌入式调试初始化 — 工作区: {root}")
     print("=" * 50)
 
+    if config_path.is_file():
+        print(f"✅ 配置已存在，保留原文件: {config_path}")
+        return load_config(config_path)
+
+    discovered = _discover_keil_projects(root)
+    if not discovered:
+        print("❌ 当前工作区未找到 .uvprojx 或 .uvproj 工程文件")
+        raise FileNotFoundError("当前工作区没有可初始化的 Keil 工程")
+
     config: dict[str, Any] = {
         "_generated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "workspace": str(root),
-        "project_count": project_count,
+        "project_count": len(discovered),
         "keil": {"uv4_path": DEFAULT_UV4_PATH},
     }
 
     projects: list[dict[str, Any]] = []
-    for index in range(project_count):
+    for project_file in discovered:
         projects.append({
-            "name": f"project{index + 1}",
-            "dir": "",
-            "file": "",
+            "name": project_file.stem,
+            "dir": str(project_file.parent),
+            "file": project_file.name,
             "serial": {
                 "port": "COM1",
                 "baud": DEFAULT_BAUD,
@@ -282,13 +300,15 @@ def init_project(workspace_dir: str, project_count: int) -> dict[str, Any]:
         })
     config["projects"] = projects
 
-    print(f"\n按指定数量生成 {project_count} 个项目配置，不扫描工作区")
+    print(f"\n发现 {len(discovered)} 个 Keil 工程：")
+    for project_file in discovered:
+        print(f"  - {project_file}")
 
     # ── 保存 ───────────────────────────────────────────────────────
     save_config(config, save_dir=root)
     print(f"\n✅ 初始化完成！配置文件已生成:")
     print(f"   {root / '.copilot' / CONFIG_FILENAME}")
-    print("   已填入通用默认值；请修改工程路径、工程文件、COM 端口及其他实际参数")
+    print("   工程路径已按当前工作区生成；Keil、串口和下载器等参数保持默认值")
 
     return config
 
@@ -305,9 +325,9 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="嵌入式调试配置文件管理器")
     parser.add_argument("--init", metavar="工作区目录",
-                        help="启动初始化：按项目数量生成可编辑的占位配置")
+                        help="启动初始化：扫描工作区并生成 Keil 工程配置")
     parser.add_argument("--project-count", type=int,
-                        help="要生成的项目数量；与 --init 一起使用")
+                        help="兼容旧调用，初始化时忽略，项目数量以扫描结果为准")
     parser.add_argument("--read", action="store_true", help="读取并打印当前配置")
     parser.add_argument("--validate", action="store_true", help="校验配置完整性")
     parser.add_argument("--get", choices=["keil", "serial", "projects", "debugger"],
@@ -321,8 +341,6 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.init:
-        if args.project_count is None:
-            parser.error("--init 必须同时提供 --project-count")
         init_project(args.init, args.project_count)
         return
 

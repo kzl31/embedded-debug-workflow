@@ -71,12 +71,11 @@ steps:
   - seq: 1
     id: step_init_config
     phase: STARTUP
-    what: "确保工作区配置存在；首次缺失时生成双项目模板，之后完全以配置文件中的实际项目列表为准"
-    action: check_file
+    what: "确保工作区配置存在；首次缺失时扫描当前工作区的 Keil 工程并按实际路径生成配置，其他参数使用默认值"
+    action: run_script
+    call: 'python scripts/config_reader.py --init "{project_dir}"'
     params:
-      target: embedded-debug-config.json
-      search_paths:
-        - "{project_dir}/.copilot"
+      behavior: "与 /kzl 初始化一致：已有配置保留；缺失时扫描 .uvprojx/.uvproj 并填写实际工程路径；其他参数采用默认值"
     precheck: []
     pre_action: []
     on_success:
@@ -85,10 +84,9 @@ steps:
           projectInfo.configFound: true
       - goto: 2
     on_failure:
-      - run_script: 'python scripts/config_reader.py --init "{project_dir}" --project-count 2'
       - update_state:
-          projectInfo.configFound: true
-      - goto: 2
+          projectInfo.configFound: false
+      - wait_user: "当前工作区未找到 Keil 工程或配置生成失败。请确认工作区包含 .uvprojx/.uvproj 后再继续。"
 
   - seq: 2
     id: step_confirm_config
