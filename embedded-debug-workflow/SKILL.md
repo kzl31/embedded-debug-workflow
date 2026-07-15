@@ -65,6 +65,8 @@ python "{{SKILL_DIR}}\scripts\workflow_engine.py" --project "<项目根目录>" 
 2. AI 步骤执行后必须 `--ack success` 或 `--ack failure`
 3. **禁止跳过引擎直接操作**（编译/下载/分析等）
 4. **只有到达流程完成步骤才可以停止**
+5. 每次到达新步骤时，将 `user_display.current_step` 简短展示给用户；这只是进度展示，不是分析汇报
+6. `user_display.loop` 存在时，同时简述调试循环次数和原因，不展开日志、根因或结论
 
 ### 快捷命令
 

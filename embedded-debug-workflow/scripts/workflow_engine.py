@@ -612,7 +612,26 @@ class WorkflowEngine:
         result["next_action"] = (
             f'{self.engine_bin} --project "{self.project_dir}" --ack success'
             f'   （若未达成目标用 --ack failure）')
+        result["user_display"] = self._user_display(step)
         return result
+
+    def _user_display(self, step: dict) -> dict:
+        """生成简短进度展示；仅告知正在做什么，不构成分析或结果汇报。"""
+        display = {
+            "type": "progress_only",
+            "current_step": f'步骤 {step.get("seq")}/{len(self.steps)}：{step.get("what", "")}',
+            "instruction": "向用户简述当前步骤；不要展开分析、结论或报告内容。",
+        }
+        iteration = int(self._get_path("debugLoopInfo.iterationCount") or 0)
+        if step.get("phase") == "DEBUG_LOOP":
+            loop_count = iteration + 1
+            reason = self._get_path("debugLoopInfo.loopReason") or "首次进入调试循环，开始定位和采集证据"
+            display["loop"] = {
+                "count": loop_count,
+                "reason": reason,
+                "text": f"调试循环第 {loop_count} 轮：{reason}",
+            }
+        return display
 
     # ── 终止状态 ────────────────────────────────────────────────
 

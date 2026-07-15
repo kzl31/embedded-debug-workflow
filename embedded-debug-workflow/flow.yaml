@@ -378,6 +378,7 @@ steps:
             else:
               - update_state:
                   debugLoopInfo.iterationCount: "+1"
+                  debugLoopInfo.loopReason: "当前日志证据不足，继续补充 CHESHI 观测"
               - goto: 6            # 返回加打印，继续迭代
 
   - seq: 11
@@ -454,6 +455,9 @@ steps:
           debugLoopInfo.compileRetryCount: 0
       - goto: 14
     on_failure:
+      - update_state:
+          debugLoopInfo.iterationCount: "+1"
+          debugLoopInfo.loopReason: "修复后的固件编译未通过，返回定位并修正"
       - when: "debugLoopInfo.compileRetryCount >= 5"
         then:
           - log:
@@ -480,6 +484,9 @@ steps:
           msg: "修复固件下载成功，开始串口验证"
       - goto: 15
     on_failure:
+      - update_state:
+          debugLoopInfo.iterationCount: "+1"
+          debugLoopInfo.loopReason: "修复固件下载失败，返回调试循环重新处理"
       - goto: 5
 
   - seq: 15
@@ -522,6 +529,8 @@ steps:
     on_failure:
       - update_state:
           verifyReport.fixConfirmed: false
+          debugLoopInfo.iterationCount: "+1"
+          debugLoopInfo.loopReason: "验证证据不足或故障仍然存在，返回调试循环"
       - goto: 5
 
   - seq: 17
@@ -579,6 +588,9 @@ steps:
     on_success:
       - goto: 20
     on_failure:
+      - update_state:
+          debugLoopInfo.iterationCount: "+1"
+          debugLoopInfo.loopReason: "回归检查未通过，返回调试循环继续排查"
       - goto: 5
 
   - seq: 20
