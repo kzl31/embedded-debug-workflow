@@ -245,64 +245,98 @@ def _ensure_project(config: dict, index: int) -> dict:
 
 # ── 启动初始化（核心） ────────────────────────────────────────────────
 
-def _discover_keil_projects(root: Path) -> list[Path]:
-    """递归查找工作区中的 Keil 工程文件，优先采用 .uvprojx。"""
-    ignored_dirs = {".git", ".copilot", "__pycache__", "node_modules"}
-    candidates = [
-        path for pattern in ("*.uvprojx", "*.uvproj")
-        for path in root.rglob(pattern)
-        if not any(part.lower() in ignored_dirs for part in path.relative_to(root).parts)
-    ]
-    return sorted(candidates, key=lambda path: (path.suffix.lower() != ".uvprojx", str(path).lower()))
+def discover_keil_projects(root: str | Path) -> list[Path]:
+    """递归扫描工作区中的 Keil 工程文件。
+
+    扩展名按大小写不敏感处理；同一目录下同时存在同名 ``.uvprojx`` 和
+    ``.uvproj`` 时只保留新版 ``.uvprojx``。依赖、缓存及 Skill 运行目录不会扫描。
+    """
+    workspace = Path(root).resolve()
+    if not workspace.is_dir():
+        raise NotADirectoryError(f"工作区目录不存在或不是目录: {workspace}")
+
+    ignored_dirs = {
+        ".git", ".copilot", ".venv", "venv", "__pycache__", "node_modules",
+    }
+    candidates: list[Path] = []
+    for current_dir_text, dir_names, file_names in os.walk(workspace):
+        dir_names[:] = [name for name in dir_names if name.lower() not in ignored_dirs]
+        current_dir = Path(current_dir_text)
+        for file_name in file_names:
+            path = current_dir / file_name
+            if path.suffix.lower() in {".uvprojx", ".uvproj"}:
+                candidates.append(path.resolve())
+
+    # 先排序可确保新版 .uvprojx 优先，再按“目录 + 文件主名”去重旧格式工程。
+    candidates.sort(key=lambda path: (
+        str(path.parent).lower(), path.stem.lower(), path.suffix.lower() != ".uvprojx"
+    ))
+    unique: dict[tuple[str, str], Path] = {}
+    for path in candidates:
+        key = (str(path.parent).casefold(), path.stem.casefold())
+        unique.setdefault(key, path)
+    return list(unique.values())
+
+
+def _new_project_config(project_file: Path) -> dict[str, Any]:
+    """为扫描到的工程生成默认配置项。"""
+    return {
+        "name": project_file.stem,
+        "dir": str(project_file.parent),
+        "file": project_file.name,
+        "serial": {
+            "port": "COM1",
+            "baud": DEFAULT_BAUD,
+            "data_bits": DEFAULT_DATA_BITS,
+            "stop_bits": DEFAULT_STOP_BITS,
+            "parity": DEFAULT_PARITY,
+        },
+        "debugger": {
+            "type": DEFAULT_DEBUGGER_TYPE,
+            "com": "COM1",
+        },
+    }
 
 
 def init_project(workspace_dir: str, project_count: int | None = None) -> dict[str, Any]:
-    """根据工作区中的实际 Keil 工程生成无交互默认配置。"""
+    """扫描工作区并生成或增量更新 Keil 工程配置。"""
     root = Path(workspace_dir).resolve()
     config_path = root / ".copilot" / CONFIG_FILENAME
     print("=" * 50)
     print(f"🔧 嵌入式调试初始化 — 工作区: {root}")
     print("=" * 50)
 
-    if config_path.is_file():
-        print(f"✅ 配置已存在，保留原文件: {config_path}")
-        return load_config(config_path)
-
-    discovered = _discover_keil_projects(root)
+    print("🔍 正在递归扫描 .uvprojx / .uvproj 工程文件……")
+    discovered = discover_keil_projects(root)
+    print(f"🔍 扫描完成，共发现 {len(discovered)} 个 Keil 工程")
     if not discovered:
-        print("❌ 当前工作区未找到 .uvprojx 或 .uvproj 工程文件")
+        print(f"❌ 当前工作区未找到 .uvprojx 或 .uvproj 工程文件: {root}")
         raise FileNotFoundError("当前工作区没有可初始化的 Keil 工程")
 
-    config: dict[str, Any] = {
-        "_generated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "workspace": str(root),
-        "project_count": len(discovered),
-        "keil": {"uv4_path": DEFAULT_UV4_PATH},
+    config = load_config(config_path) if config_path.is_file() else {}
+    existing_projects = config.get("projects", [])
+    existing_paths = {
+        str((Path(item.get("dir", "")) / item.get("file", "")).resolve()).casefold()
+        for item in existing_projects
+        if item.get("dir") and item.get("file")
     }
-
-    projects: list[dict[str, Any]] = []
+    added = 0
     for project_file in discovered:
-        projects.append({
-            "name": project_file.stem,
-            "dir": str(project_file.parent),
-            "file": project_file.name,
-            "serial": {
-                "port": "COM1",
-                "baud": DEFAULT_BAUD,
-                "data_bits": DEFAULT_DATA_BITS,
-                "stop_bits": DEFAULT_STOP_BITS,
-                "parity": DEFAULT_PARITY,
-            },
-            "debugger": {
-                "type": DEFAULT_DEBUGGER_TYPE,
-                "com": "COM1",
-            },
-        })
-    config["projects"] = projects
+        if str(project_file).casefold() not in existing_paths:
+            existing_projects.append(_new_project_config(project_file))
+            added += 1
+
+    config["_generated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    config["workspace"] = str(root)
+    config["project_count"] = len(existing_projects)
+    config.setdefault("keil", {"uv4_path": DEFAULT_UV4_PATH})
+    config["projects"] = existing_projects
 
     print(f"\n发现 {len(discovered)} 个 Keil 工程：")
     for project_file in discovered:
         print(f"  - {project_file}")
+    if config_path.is_file():
+        print(f"\n♻️ 已保留原有工程参数，新增 {added} 个扫描到的工程")
 
     # ── 保存 ───────────────────────────────────────────────────────
     save_config(config, save_dir=root)
@@ -326,6 +360,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="嵌入式调试配置文件管理器")
     parser.add_argument("--init", metavar="工作区目录",
                         help="启动初始化：扫描工作区并生成 Keil 工程配置")
+    parser.add_argument("--scan", metavar="工作区目录",
+                        help="只扫描并输出工作区中的 Keil 工程，不修改配置")
     parser.add_argument("--project-count", type=int,
                         help="兼容旧调用，初始化时忽略，项目数量以扫描结果为准")
     parser.add_argument("--read", action="store_true", help="读取并打印当前配置")
@@ -340,8 +376,23 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    if args.scan:
+        projects = discover_keil_projects(args.scan)
+        print(json.dumps({
+            "workspace": str(Path(args.scan).resolve()),
+            "count": len(projects),
+            "projects": [str(path) for path in projects],
+        }, indent=2, ensure_ascii=False))
+        if not projects:
+            sys.exit(1)
+        return
+
     if args.init:
-        init_project(args.init, args.project_count)
+        try:
+            init_project(args.init, args.project_count)
+        except (FileNotFoundError, NotADirectoryError) as exc:
+            print(f"[config_reader] ❌ {exc}", file=sys.stderr)
+            sys.exit(1)
         return
 
     # 解析实际配置文件路径

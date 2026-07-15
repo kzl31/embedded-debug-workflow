@@ -98,7 +98,7 @@ steps:
         读取工作区 .copilot/embedded-debug-config.json。projects 数组是项目列表的唯一依据：
         用户可以自行增加、删除或重排项目，不得使用 project_count 推断实际数量。
            向用户展示每个项目的下标、name、dir、file、serial 和 debugger，然后询问：
-          1. 整份配置是否已按实际环境填写完成？【已完成 / 未完成，需要修改】
+          1. 本次使用哪份配置？【按现在配置进行 / 已修改配置，按照最新进行】
           2. 对 projects 中每一个项目分别询问本次模式：
              默认建议：【仅编译(compile_only)】，其他项目为【不编译不下载(none)】，【编译+下载(full)】；
         若配置未完成，提示用户直接修改该 JSON；修改后运行
@@ -309,9 +309,9 @@ steps:
   - seq: 9
     id: step_capture_log
     phase: DEBUG_LOOP
-    what: "启动串口监听，捕获日志（仅 buildMode=full 且已下载时执行）"
+    what: "等待10秒后启动串口监听，捕获日志（仅 buildMode=full 且已下载时执行）"
     action: run_script
-    call: 'python scripts/multi_project_runner.py --action serial --config-dir "{project_dir}" --modes {projectInfo.projectModes} --duration 30 --save "{project_dir}/.copilot/logs/debug_log.txt"'
+    call: 'python scripts/multi_project_runner.py --action serial --config-dir "{project_dir}" --modes {projectInfo.projectModes} --delay 10 --duration 30 --save "{project_dir}/.copilot/logs/debug_log.txt"'
     precheck:
       - assert: 'projectInfo.buildMode == "full"'
         on_fail:
@@ -319,30 +319,16 @@ steps:
               level: info
               msg: "未下载固件（buildMode≠full），跳过串口监听"
           - goto: 10
-      - assert: "debugLoopInfo.retryCount < 2"
-        on_fail:
-          - log:
-              level: error
-              msg: "retryCount ≥ 2，已达最大重试次数，结束流程"
-          - goto: 20
-    pre_action:
-      - update_state:
-          debugLoopInfo.retryCount: "+1"
+    pre_action: []
     on_success:
-      - update_state:
-          debugLoopInfo.retryCount: 0
       - goto: 10
     on_failure:
       - update_state:
-          debugLoopInfo.lastFlashStatus: "failure"
-      - when: "debugLoopInfo.retryCount >= 2"
-        then:
-          - log:
-              level: error
-              msg: "连续2次串口打开失败（retryCount=2），结束流程"
-          - goto: 20
-        else:
-          - goto: 9
+          debugLoopInfo.lastSerialStatus: "failure"
+      - log:
+          level: error
+          msg: "串口监听失败，流程已暂停"
+      - wait_user: "串口监听失败，流程已暂停；确认串口恢复后可继续"
 
   - seq: 10
     id: step_analyze_result
@@ -499,15 +485,20 @@ steps:
   - seq: 15
     id: step_verify_capture_log
     phase: VERIFY_AND_REPORT
-    what: "持续读取串口并保存修复验证日志，确认运行期间没有复现问题"
+    what: "等待10秒后持续读取串口并保存修复验证日志，确认运行期间没有复现问题"
     action: run_script
-    call: 'python scripts/multi_project_runner.py --action serial --config-dir "{project_dir}" --modes {projectInfo.projectModes} --duration 30 --save "{project_dir}/.copilot/logs/verify_log.txt"'
+    call: 'python scripts/multi_project_runner.py --action serial --config-dir "{project_dir}" --modes {projectInfo.projectModes} --delay 10 --duration 30 --save "{project_dir}/.copilot/logs/verify_log.txt"'
     precheck: []
     pre_action: []
     on_success:
       - goto: 16
     on_failure:
-      - goto: 5
+      - update_state:
+          debugLoopInfo.lastSerialStatus: "failure"
+      - log:
+          level: error
+          msg: "修复验证阶段串口监听失败，流程已暂停"
+      - wait_user: "串口监听失败，流程已暂停；确认串口恢复后可继续"
 
   - seq: 16
     id: step_confirm_fix

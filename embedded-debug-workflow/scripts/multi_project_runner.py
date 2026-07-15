@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -51,6 +52,8 @@ def main() -> None:
     parser.add_argument("--modes", required=True,
                         help="与 projects 顺序一致的逗号分隔模式")
     parser.add_argument("--duration", type=float, default=30.0)
+    parser.add_argument("--delay", type=float, default=0.0,
+                        help="串口监听开始前的等待时间（秒），默认不等待")
     parser.add_argument("--save", help="串口日志基础路径；多项目自动附加项目标识")
     args = parser.parse_args()
 
@@ -77,6 +80,11 @@ def main() -> None:
         if not uv4 or not Path(uv4).is_file():
             print("❌ 未找到 UV4.exe，请检查 keil.uv4_path")
             sys.exit(1)
+
+    # 下载完成后给目标板预留稳定运行时间，再打开串口采集正式日志。
+    if args.action == "serial" and args.delay > 0:
+        print(f"⏳ 等待 {args.delay:g} 秒后开始串口监听...")
+        time.sleep(args.delay)
 
     failures: list[str] = []
     for index in indices:
