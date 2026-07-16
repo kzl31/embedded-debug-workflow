@@ -91,14 +91,6 @@ def load_json(path: Path) -> dict:
     return {}
 
 
-def save_json(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    tmp.replace(path)
-
-
 def load_yaml(path: Path) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
@@ -125,6 +117,20 @@ def _decrypt_json(encrypted: str) -> dict:
     raw = base64.b64decode(encrypted.encode("ascii"))
     return json.loads(_xor_bytes(raw, _ENCRYPT_KEY).decode("utf-8"))
 
+
+def _decode_state(text: str) -> dict:
+    """兼容读取加密状态与旧版明文 JSON 状态。"""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            data = _decrypt_json(text.strip())
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("flow-gate.json 既不是有效明文 JSON，也不是有效加密状态") from exc
+    if not isinstance(data, dict):
+        raise ValueError("flow-gate.json 顶层必须是 JSON 对象")
+    return data
+
 # ══════════════════════════════════════════════════════════════════════
 # 状态管理
 # ══════════════════════════════════════════════════════════════════════
@@ -136,7 +142,7 @@ def get_flow_gate_path(project_dir: str) -> Path:
 def load_flow_gate(project_dir: str) -> dict:
     path = get_flow_gate_path(project_dir)
     if path.exists():
-        return _decrypt_json(path.read_text(encoding="utf-8"))
+        return _decode_state(path.read_text(encoding="utf-8"))
     template = TEMPLATES_DIR / FLOW_GATE_FILENAME
     if template.exists():
         data = load_json(template)
@@ -144,8 +150,7 @@ def load_flow_gate(project_dir: str) -> dict:
         data = _default_flow_gate()
     data["lastUpdated"] = now_iso()
     data["debugSession"]["startTime"] = now_iso()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    save_json(path, data)
+    save_flow_gate(project_dir, data, force=True)
     return data
 
 
@@ -153,14 +158,14 @@ def save_flow_gate(project_dir: str, data: dict, force: bool = False) -> None:
     fpath = get_flow_gate_path(project_dir)
     if fpath.exists() and not force:
         try:
-            on_disk = json.loads(fpath.read_text(encoding="utf-8"))
+            on_disk = _decode_state(fpath.read_text(encoding="utf-8"))
             disk_ts = on_disk.get("lastUpdated", "")
             mem_ts = data.get("lastUpdated", "")
             if disk_ts and disk_ts != mem_ts:
                 print(f"[workflow_engine] ⚠️ flow-gate.json 已被外部修改，跳过保存"
                       f"（磁盘: {disk_ts} ≠ 内存: {mem_ts}）", file=sys.stderr)
                 return
-        except (json.JSONDecodeError, OSError):
+        except (ValueError, OSError):
             pass
     data["lastUpdated"] = now_iso()
     fpath.parent.mkdir(parents=True, exist_ok=True)
