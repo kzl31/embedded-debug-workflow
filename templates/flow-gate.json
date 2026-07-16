@@ -3,6 +3,12 @@
   "currentPhase": null,
   "completedPhases": [],
   "lastUpdated": null,
+  "pauseState": {
+    "waiting": false,
+    "reason": "",
+    "seq": null,
+    "since": null
+  },
   "projectInfo": {
     "configFound": false,
     "initialQuestionsAnswered": false,
