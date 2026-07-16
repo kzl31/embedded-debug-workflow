@@ -194,6 +194,7 @@ def _default_flow_gate() -> dict:
         },
         "debugLoopInfo": {
             "iterationCount": 0,
+            "iterationExhausted": False,
             "compileRetryCount": 0,
             "cheshiAdded": False,
             "lastBuildStatus": None,

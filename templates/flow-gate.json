@@ -16,6 +16,8 @@
   },
   "debugLoopInfo": {
     "iterationCount": 0,
+    "iterationExhausted": false,
+    "compileRetryCount": 0,
     "cheshiAdded": false,
     "lastBuildStatus": null,
     "lastFlashStatus": null,
