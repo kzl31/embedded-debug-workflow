@@ -4,6 +4,7 @@ __pycache__/
 
 # Workflow runtime state and per-workspace configuration
 .copilot/
+data/
 
 # Internal generated patch/index artifacts
 scripts/.gate_index/

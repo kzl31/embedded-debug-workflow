@@ -12,7 +12,7 @@
     "hardwareReady": false,
     "faultDescribed": false,
     "configConfirmed": false,
-    "buildMode": "none"
+    "buildMode": ""
   },
   "debugLoopInfo": {
     "iterationCount": 0,

@@ -91,29 +91,35 @@ steps:
   - seq: 2
     id: step_confirm_config
     phase: STARTUP
-    what: "读取配置中的全部项目；默认仅编译当前文档所属项目，完整编译下载必须显式确认"
+    what: "读取配置中的全部项目；对每一个项目逐一询问本次执行模式，不设置默认值"
     action: ask_user
     params:
       template: |
         读取工作区 .copilot/embedded-debug-config.json。projects 数组是项目列表的唯一依据：
         用户可以自行增加、删除或重排项目，不得使用 project_count 推断实际数量。
-           向用户展示每个项目的下标、name、dir、file、serial 和 debugger，然后询问：
+        向用户展示每个项目的下标、name、dir、file、serial 和 debugger，然后询问：
           1. 本次使用哪份配置？【按现在配置进行 / 已修改配置，按照最新进行】
           2. 对 projects 中每一个项目分别询问本次模式：
-             默认建议：【仅编译(compile_only)】，其他项目为【不编译不下载(none)】，【编译+下载(full)】；
+             【不编译不下载(none)】
+             【仅编译(compile_only)】
+             【编译下载(compile_flash)】
+             【编译下载监听(full)】
+        四个选项均不设置默认值或推荐值；每一个项目都必须得到用户的明确选择，禁止根据
+        当前文档、历史选择或其他项目的选择自动填充。
         若配置未完成，提示用户直接修改该 JSON；修改后运行
         config_reader.py --validate --path <配置文件>，校验通过才能确认完成。
         最后依次记录：
           - --set projectInfo.projectCount=<projects数组实际长度>
           - --set projectInfo.currentProjectIndex=<当前文档所属项目在 projects 数组中的下标>
-          - --set projectInfo.projectModes=<按项目下标排列的逗号分隔模式，如 compile_only,none>
+          - --set projectInfo.projectModes=<按项目下标排列的逗号分隔模式，如 compile_only,compile_flash>
           - --set projectInfo.configConfirmed=<true|false>
-          - --set projectInfo.buildMode=<聚合模式：任一full则full；否则任一compile_only则compile_only；全none则none>
+          - --set projectInfo.buildMode=<聚合模式：任一full则full；否则任一compile_flash则compile_flash；否则任一compile_only则compile_only；全none则none>
           - --ack success 推进。
         先根据当前文档所属工程确定 currentProjectIndex；无法唯一确定时必须询问用户，禁止
-        默认猜测。默认 projectModes 为当前项目 compile_only、其他项目 none。
+        默认猜测。
         projectModes 项数必须与 projects 数组长度完全一致。后续编译、下载和串口监听
-        必须逐项目读取 projectModes：none 跳过全部，compile_only 只编译，full 编译+下载+监听。
+        必须逐项目读取 projectModes：none 跳过全部，compile_only 只编译，
+        compile_flash 编译+下载但不监听，full 编译+下载+监听。
     precheck: []
     pre_action: []
     on_success:
@@ -240,7 +246,7 @@ steps:
     precheck:
       - assert: 'projectInfo.buildMode != "none"'
         on_fail:
-          - goto: 8
+          - goto: 19
       - assert: "debugLoopInfo.compileRetryCount < 5"
         on_fail:
           - log:
@@ -254,7 +260,11 @@ steps:
       - update_state:
           debugLoopInfo.lastBuildStatus: "success"
           debugLoopInfo.compileRetryCount: 0
-      - goto: 8
+      - when: 'projectInfo.buildMode == "compile_only"'
+        then:
+          - goto: 19
+        else:
+          - goto: 8
     on_failure:
       - update_state:
           debugLoopInfo.lastBuildStatus: "failure"
@@ -283,9 +293,6 @@ steps:
               level: error
               msg: "retryCount ≥ 2，已达最大重试次数，禁止继续下载"
           - goto: 20
-      - assert: 'projectInfo.buildMode == "full"'
-        on_fail:
-          - goto: 9
     pre_action:
       - update_state:
           debugLoopInfo.retryCount: "+1"
@@ -293,7 +300,11 @@ steps:
       - update_state:
           debugLoopInfo.lastFlashStatus: "success"
           debugLoopInfo.retryCount: 0
-      - goto: 9
+      - when: 'projectInfo.buildMode == "full"'
+        then:
+          - goto: 9
+        else:
+          - goto: 19
     on_failure:
       - update_state:
           debugLoopInfo.lastFlashStatus: "failure"
@@ -309,16 +320,10 @@ steps:
   - seq: 9
     id: step_capture_log
     phase: DEBUG_LOOP
-    what: "等待10秒后启动串口监听，捕获日志（仅 buildMode=full 且已下载时执行）"
+    what: "等待10秒后启动串口监听，捕获日志（仅编译下载监听模式会到达本步）"
     action: run_script
     call: 'python scripts/multi_project_runner.py --action serial --config-dir "{project_dir}" --modes {projectInfo.projectModes} --delay 10 --duration 30 --save "{project_dir}/.copilot/logs/debug_log.txt"'
-    precheck:
-      - assert: 'projectInfo.buildMode == "full"'
-        on_fail:
-          - log:
-              level: info
-              msg: "未下载固件（buildMode≠full），跳过串口监听"
-          - goto: 10
+    precheck: []
     pre_action: []
     on_success:
       - goto: 10
@@ -596,11 +601,11 @@ steps:
   - seq: 20
     id: step_report
     phase: VERIFY_AND_REPORT
-    what: "生成包含完整证据链的详细报告，写入记忆，并提交推送公司 GitLab"
+    what: "生成包含完整证据链的详细报告，并写入项目索引和持久记忆"
     action: report
     params:
       report_template: "templates/report.md"
-      report_path: "{skill_dir}/data/reports/{date}_{short_desc}.md"
+      report_path: "{project_dir}/.copilot/报告/{date}_{short_desc}.md"
       requirements: |
         必须填写模板全部 11 节，并以当前对话为主线，结合源码、Git 差异、流程状态、
         编译/下载输出和串口日志形成可追溯证据链。记录失败尝试、排除过程、修复原理、
@@ -646,13 +651,6 @@ steps:
         rules: |
           写入前先查看 /memories/，优先更新已有文件；只保存可复用摘要和报告绝对路径，
           不复制整篇报告，不保存凭据或大段日志。同一 report_path 不得重复写入。
-      git_publish:
-        call: 'python "{skill_dir}/scripts/git_sync.py" --publish-report "{report_path}" --title "{short_desc}"'
-        remote: "公司仓库"
-        branch: "workflow/report-memory-sync"
-        rules: |
-          报告、data/debug-history.yaml 和持久记忆均写入成功后才能执行。脚本必须成功提交并
-          推送远程；失败时按 on_failure 留在当前步骤，不得进入完成步骤。
     precheck: []
     pre_action: []
     on_success:

@@ -21,23 +21,7 @@ action: resolve_workspace
 > 配置为**工作区级**：`{工作区}/.copilot/embedded-debug-config.json`，存放各工程的
 > 路径 ↔ 串口 ↔ 下载器 对应关系。调试报告/日志则写入各自 `{项目目录}/.copilot/`。
 
-### Step 2: 同步 Skill 仓库最新内容
-
-```yaml
-action: run_script
-call: python "{skill_dir}/scripts/git_sync.py" --sync
-说明: 从公司 GitLab 拉取最新内容，并切换到 workflow/report-memory-sync 专用分支
-```
-
-- 远程固定使用 `公司仓库`（`http://16.16.16.226/Kzl/embedded-debug-workflow.git`）。
-- 仓库根目录必须是 `{skill_dir}` 本身；Skill 被复制到 Agent 环境后，`SKILL.md`、`flow.yaml`、
-  `scripts/`、`data/` 等内容必须直接位于仓库根部，禁止再套一层 `embedded-debug-workflow/`。
-- 本机对应仓库路径为 `C:\Users\CDYFZX\Desktop\自动化流程\embedded-debug-workflow`。
-- `{skill_dir}/.git` 不存在时，脚本会直接在 `{skill_dir}` 初始化仓库，并以远程专用分支内容
-  建立工作树；不会把仓库初始化到 Agent 目录或工作区的上一级。
-- 同步失败、存在冲突或已跟踪文件有未提交改动时立即停止，不得使用旧内容继续初始化。
-
-### Step 3: 直接运行初始化脚本
+### Step 2: 直接运行初始化脚本
 
 ```yaml
 action: run_script

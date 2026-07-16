@@ -6,24 +6,10 @@
 
 ## 强制规则
 
-1. **被调试项目全程禁止 `git push`** — 项目源码操作仅限本地仓库
+1. **全程禁止 `git push`** — 所有操作仅限本地仓库
 2. **稳定基线分支**：本地 `main`/`master`，禁止直接在该分支编写调试代码
 3. **临时调试分支**：每次故障独立创建，命名格式 `debug/故障简述_YYYYMMDD`
 4. **临时 CHESHI 代码与正式修复代码强制隔离**
-
----
-
-## Skill 报告仓库例外
-
-- Skill 仓库根目录固定为 Skill 自身目录；本机路径是
-	`C:\Users\CDYFZX\Desktop\自动化流程\embedded-debug-workflow`。远程专用分支根部必须
-	直接包含 `SKILL.md`、`flow.yaml`、`scripts/` 和 `data/`，不得再套一层目录。
-- `/kzl 初始化` 先运行 `scripts/git_sync.py --sync`，从 `公司仓库` 获取最新内容并切换
-	`workflow/report-memory-sync` 分支。
-- 流程报告和 `/kzl 报告` 固定写入 `embedded-debug-workflow/data/reports/`，与
-	`data/debug-history.yaml` 位于同一目录树。
-- 报告完成后运行 `scripts/git_sync.py --publish-report ...`，只提交报告和历史索引并推送
-	公司 GitLab。此项是“项目源码禁止推送”规则的唯一例外。
 
 ---
 

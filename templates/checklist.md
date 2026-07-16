@@ -3,7 +3,7 @@
 > 本清单在「每次调试迭代完成后」以及「最终回归验证」时逐项核对。
 > 每一项都给出**验证方法**与**验收标准**，全部打勾方可进入下一步或出报告。
 > 配置/路径约定：`{工作区}/.copilot/embedded-debug-config.json`（工程配置）、
-> `{skill_dir}/data/reports/{日期}_{简述}.md`（报告）、
+> `{项目目录}/.copilot/报告/{日期}_{简述}.md`（报告）、
 > `{项目目录}/.copilot/logs/verify_log.txt`（验证日志）。
 
 ---
@@ -87,13 +87,11 @@
 
 ## 7. 报告与记忆
 
-- [ ] **报告生成**：`{skill_dir}/data/reports/{日期}_{简述}.md` 含
+- [ ] **报告生成**：`{项目目录}/.copilot/报告/{日期}_{简述}.md` 含
       对话背景 / 环境配置 / 复现步骤 / 排查时间线 / 证据链 / 根因分析 / 修复原理 /
       变更文件 / 验证结果与边界 / 回归风险 / 后续建议，并明确所有未验证事项
 - [ ] **索引写入**：追加到 `data/debug-history.yaml`（date/desc/fault/root_cause/status/verification/report/source）
 - [ ] **持久记忆**：摘要和报告路径写入 `/memories/embedded-debug-workflow.md`，且无重复条目
-- [ ] **报告发布**：仅暂存报告和 `data/debug-history.yaml`，提交并推送
-      `公司仓库/workflow/report-memory-sync` 成功
 - [ ] **状态收尾**：`flow-gate.json` 的 `currentPhase` 已标记 `COMPLETED`
 
 ---

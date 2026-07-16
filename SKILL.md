@@ -84,8 +84,7 @@ python "{{SKILL_DIR}}\scripts\workflow_engine.py" --project "<项目根目录>" 
 > 不得先运行 `workflow_engine.py`，不得初始化或推进流程。命令可为流程准备配置、打印和固件，
 > 但不受 `flow.yaml` 当前 `seq` 约束。`/klz 打印` 作为 `/kzl 打印` 的兼容拼写处理。
 > 所有 `report` 动作必须使用完整报告模板，明确证据与验证边界，并同时更新
-> `data/debug-history.yaml` 和 `/memories/embedded-debug-workflow.md` 持久记忆，再将
-> `data/reports/` 内报告与历史索引提交、推送至公司 GitLab 专用分支；任何一项失败均不得宣称报告完成。
+> `data/debug-history.yaml` 和 `/memories/embedded-debug-workflow.md` 持久记忆；任何一项失败均不得宣称报告完成。
 
 ---
 

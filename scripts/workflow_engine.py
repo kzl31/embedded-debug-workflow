@@ -185,7 +185,7 @@ def _default_flow_gate() -> dict:
             "hardwareReady": False,
             "faultDescribed": False,
             "configConfirmed": False,
-            "buildMode": "none"
+            "buildMode": ""
         },
         "debugLoopInfo": {
             "iterationCount": 0,
@@ -374,11 +374,12 @@ class WorkflowEngine:
         self.finished = False
         self.waiting = False
 
-        # 预创建项目日志和 Skill 报告目录，避免报告步骤首次写入失败。
+        # 预创建日志与报告目录：UV4 / 串口脚本不会自动创建目录，
+        # 若目录不存在会直接报"创建文件失败"，导致编译/监听日志无法落盘。
         try:
             copilot_dir = Path(self.project_dir) / ".copilot"
             logs_dir = copilot_dir / "logs"
-            report_dir = Path(__file__).resolve().parent.parent / "data" / "reports"
+            report_dir = copilot_dir / "报告"
             os.makedirs(logs_dir, exist_ok=True)
             os.makedirs(report_dir, exist_ok=True)
             print(f"[init] 📁 已预创建目录: {logs_dir}")

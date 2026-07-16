@@ -41,103 +41,46 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    subgraph STARTUP["■ STARTUP 阶段 (seq 1~3)"]
-        S1["seq1 step_check_config
-            action: check_file
-            检查 embedded-debug-config.json"]
-        S1 --> S1C{"存在?"}
-        S1C -->|✅| S1OK["on_success: read_config
-            → goto 2"]
-        S1C -->|❌| S1M["on_failure: config_reader --init
-            → goto 2"]
-        S1OK --> S2
-        S1M --> S2
-        S2["seq2 step_collect_params
-            action: ask_user
-            采集故障现象 + 确认工程配置"]
-        S2 --> S2D["AI 提问 → --ack success
-            → goto 3"]
-        S2D --> S3["seq3 step_to_debug
-            action: noop → goto 4"]
-    end
-    S3 --> D4
+    S2["seq 2：逐项目询问模式<br/>无默认值、无推荐值"] --> Mode{"项目聚合模式"}
+    Mode -->|none| D7["seq 7：跳过编译"]
+    Mode -->|compile_only| D7
+    Mode -->|compile_flash| D7
+    Mode -->|full| D6["seq 6：添加 CHESHI 观测"]
+    D6 --> D7
 
-    subgraph DEBUG_LOOP["■ DEBUG_LOOP 阶段 (seq 4~9)"]
-        D4["seq4 step_analyze
-            action: analyze (locate)"]
-        D4 --> D5["seq5 step_add_cheshi
-            action: edit_source (insert_cheshi)"]
-        D5 --> D6["seq6 step_compile
-            action: run_script (keil_build.py)"]
-        D6 --> D6C{"编译?"}
-        D6C -->|✅| D6S["goto 7"]
-        D6C -->|❌| D6F["goto 5 🔄"]
-        D6S --> D7["seq7 step_flash
-            action: run_script (keil_flash.py)
-            precheck: retryCount<2, buildMode==full"]
-        D7 --> D7C{"下载?"}
-        D7C -->|✅| D7S["retryCount=0 → goto 8"]
-        D7C -->|❌ retry<2| D7F["goto 7 🔄"]
-        D7C -->|❌ retry≥2| D7B["exit → COMPLETED ⛔"]
-        D7S --> D8["seq8 step_capture_log
-            action: run_script (serial_monitor.py)
-            precheck: retryCount<2"]
-        D8 --> D8C{"串口?"}
-        D8C -->|✅| D8S["retryCount=0 → goto 9"]
-        D8C -->|❌ retry<2| D8F["goto 8 🔄"]
-        D8C -->|❌ retry≥2| D8B["exit → COMPLETED ⛔"]
-        D8S --> D9["seq9 step_analyze_result
-            action: analyze (root_cause)"]
-        D9 --> D9C{"根因找到?"}
-        D9C -->|✅| D9F["goto 10"]
-        D9C -->|❌| D9I{"迭代<8?"}
-        D9I -->|✅| D9R["iterationCount++ → goto 5 🔄"]
-        D9I -->|❌| D9W["wait_user → --wake 回到 seq9"]
-    end
-    D9F --> V10
+    D7 -->|none| R19["seq 19：回归检查"]
+    D7 -->|compile_only 且编译成功| R19
+    D7 -->|compile_flash/full 且编译成功| D8["seq 8：下载固件"]
+    D8 -->|compile_flash 且下载成功| R19
+    D8 -->|full 且下载成功| D9["seq 9：串口监听"]
+    D9 --> D10["seq 10：分析监听结果"]
 
-    subgraph VERIFY["■ VERIFY_AND_REPORT 阶段 (seq 10~16)"]
-        V10["seq10 step_clean_cheshi
-            action: edit_source (remove_cheshi)"]
-        V10 --> V11["seq11 step_fix_code
-            action: edit_source (fix_bug)"]
-        V11 --> V12["seq12 step_verify_build
-            action: run_script (keil_build.py)
-            precheck: buildMode!=none"]
-        V12 --> V12C{"验证?"}
-        V12C -->|✅| V12S["goto 13"]
-        V12C -->|❌| V12F["goto 4 🔄 退回调试"]
-        V12S --> V13["seq13 step_verify_flash
-            action: run_script (keil_flash.py)
-            precheck: buildMode==full"]
-        V13 --> V13C{"验证?"}
-        V13C -->|✅| V13S["goto 14"]
-        V13C -->|❌| V13F["goto 4 🔄 退回调试"]
-        V13S --> V14["seq14 step_regression
-            action: check_regression"]
-        V14 --> V15["seq15 step_report
-            action: report → goto 16"]
-        V15 --> V16["seq16 step_complete
-            action: exit → COMPLETED ✅"]
-    end
+    R19 --> R20["seq 20：生成报告"]
+    R20 --> R21["seq 21：完成"]
 ```
+
+> 四种模式必须对 `projects` 中每一个项目分别询问。`none` 不编译不下载，
+> `compile_only` 仅编译，`compile_flash` 编译下载但不监听，`full` 编译下载并监听。
 
 ## 3. 整体阶段流转
 
 ```mermaid
 stateDiagram-v2
     [*] --> STARTUP: --init
-    STARTUP --> DEBUG_LOOP: seq3 衔接 (goto 4)
-    DEBUG_LOOP --> VERIFY_AND_REPORT: seq9 找到根因 (goto 10)
-    DEBUG_LOOP --> COMPLETED: 下载失败2次 / 串口失败2次
-    VERIFY_AND_REPORT --> DEBUG_LOOP: 验证失败 (goto 4)
-    VERIFY_AND_REPORT --> COMPLETED: seq16 完成
+    STARTUP --> DEBUG_LOOP: seq 4 衔接到 seq 5
+    DEBUG_LOOP --> VERIFY_AND_REPORT: seq 7/8 按模式跳到 seq 19
+    DEBUG_LOOP --> VERIFY_AND_REPORT: seq 10 找到根因后进入修复验证
+    VERIFY_AND_REPORT --> DEBUG_LOOP: 验证失败回到 seq 5
+    VERIFY_AND_REPORT --> COMPLETED: seq 21 完成
 
     COMPLETED --> STARTUP: --reset（新任务）
     COMPLETED --> STARTUP: --init（新对话）
 
     note right of DEBUG_LOOP
         最多 8 轮迭代
-        每轮: 分析→CHESHI→编译→下载→串口→分析结果
+        full: 分析→CHESHI→编译→下载→监听→分析
+        compile_flash: 编译→下载→回归
+        compile_only: 编译→回归
+        none: 直接回归
     end note
 ```
