@@ -104,6 +104,18 @@ def now_iso() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def parse_state_value(raw: str) -> Any:
+    """按 JSON 语义解析 --set 值；普通文本保持字符串。"""
+    text = raw.strip()
+    if not text:
+        return raw
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        return raw
+    return value
+
+
 def _xor_bytes(data: bytes, key: bytes) -> bytes:
     return bytes(d ^ key[i % len(key)] for i, d in enumerate(data))
 
@@ -404,7 +416,8 @@ class WorkflowEngine:
         for item in pairs:
             if "=" not in item:
                 continue
-            key, value = item.split("=", 1)
+            key, raw_value = item.split("=", 1)
+            value = parse_state_value(raw_value)
             self._apply_update_state({key: value})
             applied[key] = value
         return self._result("state_set", f"已更新状态: {applied}", applied=applied)
