@@ -251,8 +251,10 @@ steps:
         on_fail:
           - log:
               level: error
-              msg: "编译失败已达到5次，转入生成报告"
-          - goto: 20
+            msg: "编译失败已达到5次，流程暂停；调整后将重新编译"
+          - update_state:
+            debugLoopInfo.compileRetryCount: 0
+          - wait_user: "连续5次编译失败。请调整源码或编译环境，确认后恢复流程，流程将从本编译步骤重试。"
     pre_action:
       - update_state:
           debugLoopInfo.compileRetryCount: "+1"
@@ -272,8 +274,10 @@ steps:
         then:
           - log:
               level: error
-              msg: "连续5次编译失败，转入生成报告"
-          - goto: 20
+              msg: "连续5次编译失败，流程暂停；调整后将重新编译"
+          - update_state:
+              debugLoopInfo.compileRetryCount: 0
+          - wait_user: "连续5次编译失败。请调整源码或编译环境，确认后恢复流程，流程将从本编译步骤重试。"
         else:
           - log:
               level: warning
@@ -291,8 +295,10 @@ steps:
         on_fail:
           - log:
               level: error
-              msg: "retryCount ≥ 2，已达最大重试次数，禁止继续下载"
-          - goto: 20
+            msg: "retryCount ≥ 2，流程暂停；调整后将重新下载"
+          - update_state:
+            debugLoopInfo.retryCount: 0
+          - wait_user: "连续2次下载失败。请调整目标板、下载器或连接，确认后恢复流程，流程将从本下载步骤重试。"
     pre_action:
       - update_state:
           debugLoopInfo.retryCount: "+1"
@@ -312,8 +318,10 @@ steps:
         then:
           - log:
               level: error
-              msg: "连续2次下载失败（retryCount=2），结束流程"
-          - goto: 20
+              msg: "连续2次下载失败，流程暂停；调整后将重新下载"
+          - update_state:
+              debugLoopInfo.retryCount: 0
+          - wait_user: "连续2次下载失败。请调整目标板、下载器或连接，确认后恢复流程，流程将从本下载步骤重试。"
         else:
           - goto: 8
 
@@ -355,6 +363,7 @@ steps:
     on_success:
       - update_state:
           debugLoopInfo.rootCauseFound: true
+          debugLoopInfo.iterationExhausted: false
       - goto: 12            # 跳过追问环节，直接进入验证阶段
     on_failure:
       - when: "debugLoopInfo.askUser == true"
@@ -378,8 +387,10 @@ steps:
             then:
               - log:
                   level: error
-                  msg: "连续 8 轮迭代未定位根因，结束流程"
-              - exit: COMPLETED
+                  msg: "连续 8 轮迭代未定位根因，转入临时调试代码清理与未解决报告流程"
+              - update_state:
+                  debugLoopInfo.iterationExhausted: true
+              - goto: 17
             else:
               - update_state:
                   debugLoopInfo.iterationCount: "+1"
@@ -450,8 +461,10 @@ steps:
         on_fail:
           - log:
               level: error
-              msg: "验证编译失败已达到5次，转入生成报告"
-          - goto: 20
+            msg: "验证编译失败已达到5次，流程暂停；调整后将重新编译"
+          - update_state:
+            debugLoopInfo.compileRetryCount: 0
+          - wait_user: "修复后的固件连续5次编译失败。请调整源码或编译环境，确认后恢复流程，流程将从本编译步骤重试。"
     pre_action:
       - update_state:
           debugLoopInfo.compileRetryCount: "+1"
@@ -467,8 +480,10 @@ steps:
         then:
           - log:
               level: error
-              msg: "验证阶段连续5次编译失败，转入生成报告"
-          - goto: 20
+              msg: "验证阶段连续5次编译失败，流程暂停；调整后将重新编译"
+          - update_state:
+              debugLoopInfo.compileRetryCount: 0
+          - wait_user: "修复后的固件连续5次编译失败。请调整源码或编译环境，确认后恢复流程，流程将从本编译步骤重试。"
         else:
           - goto: 5
 
@@ -489,10 +504,10 @@ steps:
           msg: "修复固件下载成功，开始串口验证"
       - goto: 15
     on_failure:
-      - update_state:
-          debugLoopInfo.iterationCount: "+1"
-          debugLoopInfo.loopReason: "修复固件下载失败，返回调试循环重新处理"
-      - goto: 5
+      - log:
+          level: error
+          msg: "修复固件下载失败，流程暂停；调整后将重新下载"
+      - wait_user: "修复固件下载失败。请调整目标板、下载器或连接，确认后恢复流程，流程将从本下载步骤重试。"
 
   - seq: 15
     id: step_verify_capture_log
@@ -541,11 +556,14 @@ steps:
   - seq: 17
     id: step_clean_cheshi
     phase: VERIFY_AND_REPORT
-    what: "确认故障解决后，删除所有 CHESHI 调试代码块并恢复正式源码"
+    what: "流程退出前删除本次新增的全部 CHESHI 临时调试代码；无论故障已解决或迭代耗尽均须清理"
     action: edit_source
     params:
       edit_action: remove_cheshi
-      require_state: verifyReport.fixConfirmed
+      note: |
+        只删除本次调试流程新增的 CHESHI 临时代码块、辅助变量、采集器和 Flush 路径，
+        不得删除项目原有的 CHESHI 代码。verifyReport.fixConfirmed=false 表示故障尚未解决，
+        仍须完成临时代码清理，并在后续报告中明确记录“未解决/未定位根因”。
     precheck: []
     pre_action: []
     on_success:
@@ -564,12 +582,23 @@ steps:
     precheck:
       - assert: 'projectInfo.buildMode != "none"'
         on_fail:
-          - goto: 19
+          - when: "debugLoopInfo.iterationExhausted == true"
+            then:
+              - goto: 20
+            else:
+              - goto: 19
     pre_action: []
     on_success:
-      - goto: 19
+      - when: "debugLoopInfo.iterationExhausted == true"
+        then:
+          - goto: 20
+        else:
+          - goto: 19
     on_failure:
-      - goto: 17
+      - log:
+          level: error
+          msg: "清理 CHESHI 后编译失败，流程暂停；调整后将重新编译"
+      - wait_user: "清理 CHESHI 后编译失败。请调整源码或编译环境，确认后恢复流程，流程将从本编译步骤重试。"
 
   - seq: 19
     id: step_regression
