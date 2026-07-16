@@ -131,14 +131,11 @@ def _decrypt_json(encrypted: str) -> dict:
 
 
 def _decode_state(text: str) -> dict:
-    """兼容读取加密状态与旧版明文 JSON 状态。"""
+    """读取引擎统一写入的加密状态。"""
     try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        try:
-            data = _decrypt_json(text.strip())
-        except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError("flow-gate.json 既不是有效明文 JSON，也不是有效加密状态") from exc
+        data = _decrypt_json(text.strip())
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("flow-gate.json 不是有效的加密状态文件") from exc
     if not isinstance(data, dict):
         raise ValueError("flow-gate.json 顶层必须是 JSON 对象")
     return data
