@@ -1,0 +1,677 @@
+# =============================================================================
+# flow.yaml — 嵌入式调试工作流（单文件线性序号驱动引擎）
+#
+# 设计理念：
+#   - 所有步骤合并到单一文件，按全局唯一 seq 线性编号
+#   - 每个 step 格式完全相同：seq / id / phase / what / action / (call|params)
+#     / precheck / pre_action / on_success / on_failure
+#   - 引擎只做「查表 + 序号跳转」，不再跨文件切状态
+#   - phase 仅作为分组标签与 AI 阶段自检（forbidden）使用，不影响跳转
+#
+# 动作类型枚举（action 字段，受控，校验不过即报错）：
+#   run_script      执行脚本命令（call 为命令字符串）
+#   check_file      检查文件是否存在
+#   read_config     标记/读取调试配置文件
+#   ask_user        向用户提问采集参数（AI 执行）
+#   edit_source     编辑源码：insert_cheshi / remove_cheshi / fix_bug（AI 执行）
+#   analyze         分析日志/定位根因（AI 执行）
+#   report          生成详细报告 + 写项目索引和持久记忆（AI 执行）
+#   check_regression 全量回归核对清单（AI 执行）
+#   update_state    更新流程状态（一般写在 on_success/on_failure 的 do 列表里）
+#   log             输出日志
+#   wait_user       人工暂停（AI 处理用户后 --wake 恢复）
+#   exit            标记流程完成
+#   noop            空操作（常用于阶段衔接/纯跳转）
+#
+# on_success / on_failure 都是「动作列表」，元素为单键对象：
+#   - update_state: { 点号路径: 值 }       （"+1" 表示自增）
+#   - run_script: "命令"
+#   - log: "msg"  或  log: { level: info|warning|error, msg: "..." }
+#   - read_config: {}
+#   - goto: <seq|id|next|done|wait>         （流向：序号 / id / 下一步 / 结束 / 暂停）
+#   - exit: COMPLETED
+#   - wait_user: "msg"
+#   - when: "条件"                           （条件动作，then/else 为同级列表）
+#       then: [ ... ]
+#       else: [ ... ]
+#
+# precheck：执行前断言列表，元素 { assert: "条件", on_fail: [动作列表] }
+# pre_action：执行前动作列表（如重试计数 +1）
+# =============================================================================
+
+meta:
+  name: embedded-debug-workflow
+  version: 2
+  description: "嵌入式固件调试自动化工作流（单文件线性序号驱动）"
+  max_iterations: 8          # 调试循环迭代上限（集中配置）
+  max_retry: 2               # 下载/监听连续重试上限（集中配置）
+  max_ask: 3                 # AI 没信心时向用户追问的次数上限（集中配置）
+  state_file: flow-gate.json
+  engine: scripts/workflow_engine.py
+
+# 阶段定义：仅用于报告分组与 AI 阶段自检（forbidden），不参与跳转
+phases:
+  - name: STARTUP
+    description: "启动阶段 — 读取配置、采集参数、确认硬件就绪"
+    forbidden: [git_log, git_diff, analyze_code, compile, flash]
+  - name: DEBUG_LOOP
+    description: "调试循环 — CHESHI 迭代、编译下载、日志分析"
+    forbidden: [generate_report]
+  - name: VERIFY_AND_REPORT
+    description: "验证与报告 — 清理 CHESHI、回归验证、生成报告"
+    forbidden: [add_cheshi]
+  - name: COMPLETED
+    description: "已完成 — 允许任意操作"
+    forbidden: []
+
+steps:
+  # ============================================================
+  # STARTUP 阶段
+  # ============================================================
+  - seq: 1
+    id: step_init_config
+    phase: STARTUP
+    what: "确保工作区配置存在；首次缺失时扫描当前工作区的 Keil 工程并按实际路径生成配置，其他参数使用默认值"
+    action: run_script
+    call: 'python scripts/config_reader.py --init "{project_dir}"'
+    params:
+      behavior: "与 /kzl 初始化一致：已有配置保留；缺失时扫描 .uvprojx/.uvproj 并填写实际工程路径；其他参数采用默认值"
+    precheck: []
+    pre_action: []
+    on_success:
+      - read_config: {}
+      - update_state:
+          projectInfo.configFound: true
+      - goto: 2
+    on_failure:
+      - update_state:
+          projectInfo.configFound: false
+      - wait_user: "当前工作区未找到 Keil 工程或配置生成失败。请确认工作区包含 .uvprojx/.uvproj 后再继续。"
+
+  - seq: 2
+    id: step_confirm_config
+    phase: STARTUP
+    what: "读取配置中的全部项目；默认仅编译当前文档所属项目，完整编译下载必须显式确认"
+    action: ask_user
+    params:
+      template: |
+        读取工作区 .copilot/embedded-debug-config.json。projects 数组是项目列表的唯一依据：
+        用户可以自行增加、删除或重排项目，不得使用 project_count 推断实际数量。
+           向用户展示每个项目的下标、name、dir、file、serial 和 debugger，然后询问：
+          1. 本次使用哪份配置？【按现在配置进行 / 已修改配置，按照最新进行】
+          2. 对 projects 中每一个项目分别询问本次模式：
+             默认建议：【仅编译(compile_only)】，其他项目为【不编译不下载(none)】，【编译+下载(full)】；
+        若配置未完成，提示用户直接修改该 JSON；修改后运行
+        config_reader.py --validate --path <配置文件>，校验通过才能确认完成。
+        最后依次记录：
+          - --set projectInfo.projectCount=<projects数组实际长度>
+          - --set projectInfo.currentProjectIndex=<当前文档所属项目在 projects 数组中的下标>
+          - --set projectInfo.projectModes=<按项目下标排列的逗号分隔模式，如 compile_only,none>
+          - --set projectInfo.configConfirmed=<true|false>
+          - --set projectInfo.buildMode=<聚合模式：任一full则full；否则任一compile_only则compile_only；全none则none>
+          - --ack success 推进。
+        先根据当前文档所属工程确定 currentProjectIndex；无法唯一确定时必须询问用户，禁止
+        默认猜测。默认 projectModes 为当前项目 compile_only、其他项目 none。
+        projectModes 项数必须与 projects 数组长度完全一致。后续编译、下载和串口监听
+        必须逐项目读取 projectModes：none 跳过全部，compile_only 只编译，full 编译+下载+监听。
+    precheck: []
+    pre_action: []
+    on_success:
+      - update_state:
+          projectInfo.initialQuestionsAnswered: true
+      - goto: 3
+    on_failure:
+      - goto: 2
+
+  - seq: 3
+    id: step_collect_params
+    phase: STARTUP
+    what: "先轻量分析相关源码和历史调试记忆，再采集故障现象；默认配置未完成时提醒用户先修改"
+    action: ask_user
+    params:
+      template: |
+        提问用户之前，先根据 seq 2 已确认的当前项目配置，快速浏览与故障描述相关的源码入口、任务/中断、通信接口和关键状态变量，
+        只形成项目结构和故障方向的初步了解，不做根因裁决，不执行编译，不因源码分析阻塞流程。
+        先读取 data/debug-history.yaml，对比当前故障是否存在相似历史案例。
+        使用 seq 2 已选择项目的配置信息，随后根据用户开场描述动态生成最多四轮故障追问，每轮最多 4 个问题，
+        用于确认现象细节、复现条件、相关模块/接口、变更点和可提供的日志。
+        信息足够后 --ack success 推进。
+      note: |
+        本步不得重复询问配置和编译下载模式。配置不完整时不得进入 DEBUG_LOOP。
+    precheck: []
+    pre_action: []
+    on_success:
+      - update_state:
+          projectInfo.faultDescribed: true
+          projectInfo.memoryChecked: true
+          projectInfo.sourcePreAnalyzed: true
+      - log:
+          level: info
+          msg: "参数已确认，进入调试流程"
+      - goto: 4
+    on_failure:
+      - goto: 3
+
+  - seq: 4
+    id: step_to_debug
+    phase: STARTUP
+    what: "STARTUP 阶段完成，进入调试循环"
+    action: noop
+    precheck: []
+    pre_action: []
+    on_success:
+      - goto: 5
+    on_failure:
+      - goto: 5
+
+  # ============================================================
+  # DEBUG_LOOP 阶段
+  # ============================================================
+  - seq: 5
+    id: step_analyze
+    phase: DEBUG_LOOP
+    what: "仅定位可疑代码位置（不是根因裁决点，严禁在此汇报/询问）"
+    action: analyze
+    params:
+      mode: locate
+      inputs:
+        - source: serial_log
+          description: "读取串口日志（如有）"
+        - source: source_code
+          description: "读取相关源代码"
+      output:
+        field: debugLoopInfo.suspiciousLocation
+        format: "<文件:行号> — <怀疑原因>"
+    note: |
+      本步只负责"定位可疑位置"并写入 debugLoopInfo.suspiciousLocation，
+      绝不是"已找到根因"的终点。
+      即便你已强烈怀疑根因（如某函数被删除），也严禁在此向用户汇报结论或询问。
+      定位完成后 --ack success 推进。
+    precheck: []
+    pre_action: []
+    on_success:
+      - when: 'projectInfo.buildMode == "full"'
+        then:
+          - goto: 6
+        else:
+          - log:
+              level: info
+              msg: "未下载固件（buildMode≠full），跳过插入 CHESHI 调试打印"
+          - goto: 7
+    on_failure:
+      - goto: 5
+
+  - seq: 6
+    id: step_add_cheshi
+    phase: DEBUG_LOOP
+    what: "在可疑位置补充充分的 CHESHI 调试观测（仅 buildMode=full 时执行；允许为采集信息适当修改代码，严禁停下）"
+    action: edit_source
+    params:
+      edit_action: insert_cheshi
+      macro_ref: "refs/cheshi-macro.md"
+    note: |
+      CHESHI 打印需下载到目标板运行才能看到日志，未下载时插入无意义。
+      （edit_source 属 AI 步骤，引擎不执行本步 precheck）
+      到达本步时：无论此刻是否已猜到根因，都必须补充足够的观测点做实证，也严禁在此停下向用户汇报或询问故障结论。
+      本步不是只加一条入口日志；至少覆盖：函数入口/出口、关键分支或状态跳转、
+      输入与输出长度、错误码/超时/重试计数、关键缓冲区索引或计数器、以及必要的原始帧摘要。
+      若现有代码无法暴露这些信息，允许增加临时变量、事件快照、计数器、环形缓冲区写入或
+      返回值记录，但不得改变业务协议、阻塞通信路径或在 ISR/通信底层直接 printf。
+      通信层只能采集事件/数据快照；由 main 主循环统一刷新调试输出。
+      所有新增调试输出（包括辅助函数、宏、环形缓冲区 Flush 以及错误路径）都必须由 CHESHI
+      条件编译或等价的 CHESHI 包裹，禁止裸 printf、puts、日志宏或未受控的调试副作用。
+      确认插入完成即 --ack success 推进。
+      注：若因 seq 6 编译失败回到本步，此时应修复编译错误（而非纠结插打印）。
+    precheck: []
+    pre_action: []
+    on_success:
+      - update_state:
+          debugLoopInfo.cheshiAdded: true
+      - goto: 7
+    on_failure:
+      - goto: 6
+
+  - seq: 7
+    id: step_compile
+    phase: DEBUG_LOOP
+    what: "编译固件"
+    action: run_script
+    call: 'python scripts/multi_project_runner.py --action build --config-dir "{project_dir}" --modes {projectInfo.projectModes}'
+    precheck:
+      - assert: 'projectInfo.buildMode != "none"'
+        on_fail:
+          - goto: 8
+      - assert: "debugLoopInfo.compileRetryCount < 5"
+        on_fail:
+          - log:
+              level: error
+              msg: "编译失败已达到5次，转入生成报告"
+          - goto: 20
+    pre_action:
+      - update_state:
+          debugLoopInfo.compileRetryCount: "+1"
+    on_success:
+      - update_state:
+          debugLoopInfo.lastBuildStatus: "success"
+          debugLoopInfo.compileRetryCount: 0
+      - goto: 8
+    on_failure:
+      - update_state:
+          debugLoopInfo.lastBuildStatus: "failure"
+      - when: "debugLoopInfo.compileRetryCount >= 5"
+        then:
+          - log:
+              level: error
+              msg: "连续5次编译失败，转入生成报告"
+          - goto: 20
+        else:
+          - log:
+              level: warning
+              msg: "编译失败，修正后返回加打印"
+          - goto: 6
+
+  - seq: 8
+    id: step_flash
+    phase: DEBUG_LOOP
+    what: "下载固件到目标板"
+    action: run_script
+    call: 'python scripts/multi_project_runner.py --action flash --config-dir "{project_dir}" --modes {projectInfo.projectModes}'
+    precheck:
+      - assert: "debugLoopInfo.retryCount < 2"
+        on_fail:
+          - log:
+              level: error
+              msg: "retryCount ≥ 2，已达最大重试次数，禁止继续下载"
+          - goto: 20
+      - assert: 'projectInfo.buildMode == "full"'
+        on_fail:
+          - goto: 9
+    pre_action:
+      - update_state:
+          debugLoopInfo.retryCount: "+1"
+    on_success:
+      - update_state:
+          debugLoopInfo.lastFlashStatus: "success"
+          debugLoopInfo.retryCount: 0
+      - goto: 9
+    on_failure:
+      - update_state:
+          debugLoopInfo.lastFlashStatus: "failure"
+      - when: "debugLoopInfo.retryCount >= 2"
+        then:
+          - log:
+              level: error
+              msg: "连续2次下载失败（retryCount=2），结束流程"
+          - goto: 20
+        else:
+          - goto: 8
+
+  - seq: 9
+    id: step_capture_log
+    phase: DEBUG_LOOP
+    what: "等待10秒后启动串口监听，捕获日志（仅 buildMode=full 且已下载时执行）"
+    action: run_script
+    call: 'python scripts/multi_project_runner.py --action serial --config-dir "{project_dir}" --modes {projectInfo.projectModes} --delay 10 --duration 30 --save "{project_dir}/.copilot/logs/debug_log.txt"'
+    precheck:
+      - assert: 'projectInfo.buildMode == "full"'
+        on_fail:
+          - log:
+              level: info
+              msg: "未下载固件（buildMode≠full），跳过串口监听"
+          - goto: 10
+    pre_action: []
+    on_success:
+      - goto: 10
+    on_failure:
+      - update_state:
+          debugLoopInfo.lastSerialStatus: "failure"
+      - log:
+          level: error
+          msg: "串口监听失败，流程已暂停"
+      - wait_user: "串口监听失败，流程已暂停；确认串口恢复后可继续"
+
+  - seq: 10
+    id: step_analyze_result
+    phase: DEBUG_LOOP
+    what: "分析日志是否足以定位根因"
+    action: analyze
+    params:
+      mode: root_cause
+      iteration_ref: debugLoopInfo.iterationCount
+      max_iterations: 8
+      hint: |
+        判断日志是否足以定位根因：
+          - 找到根因 → --ack success 推进。
+          - 有方向但未定位 → --ack failure（引擎推进迭代，iterationCount+1 回到加打印）
+          - 没有信心、需要向用户追问 → 先 --set debugLoopInfo.askUser=true 再 --ack failure
+            （引擎会进入追问环节，最多追问 meta.max_ask 次，超过转人工求助）
+    precheck: []
+    pre_action: []
+    on_success:
+      - update_state:
+          debugLoopInfo.rootCauseFound: true
+      - goto: 12            # 跳过追问环节，直接进入验证阶段
+    on_failure:
+      - when: "debugLoopInfo.askUser == true"
+        then:
+          - update_state:
+              debugLoopInfo.askUser: false
+              debugLoopInfo.askCount: "+1"
+          - when: "debugLoopInfo.askCount >= 3"
+            then:
+              - log:
+                  level: error
+                  msg: "已追问 3 次仍无足够信息，转人工求助"
+              - wait_user: "已多次向用户追问仍无法定位根因，请提供排查思路"
+            else:
+              - log:
+                  level: warning
+                  msg: "AI 没信心，进入追问环节"
+              - goto: 11           # 追问用户
+        else:
+          - when: "debugLoopInfo.iterationCount >= 8"
+            then:
+              - log:
+                  level: error
+                  msg: "连续 8 轮迭代未定位根因，结束流程"
+              - exit: COMPLETED
+            else:
+              - update_state:
+                  debugLoopInfo.iterationCount: "+1"
+                  debugLoopInfo.loopReason: "当前日志证据不足，继续补充 CHESHI 观测"
+              - goto: 6            # 返回加打印，继续迭代
+
+  - seq: 11
+    id: step_ask_clarify
+    phase: DEBUG_LOOP
+    what: "向用户追问以厘清根因方向（AI 没信心时进入）"
+    action: ask_user
+    params:
+      template: |
+        我目前还无法定位根因，需要你补充信息（可多选，按情形回答）：
+          1️⃣ 该故障首次出现的时间 / 版本 / 变更点？
+          2️⃣ 是否必现？复现频率与触发条件？
+          3️⃣ 相关模块 / 接口 / 信号的正常预期行为是什么？
+          4️⃣ 是否与其他已知问题相关？
+          5️⃣ 有无可提供的额外日志 / 抓包 / 寄存器值 / 变量取值？
+      note: |
+        本步骤仅在 AI 没信心时由 step_analyze_result 跳转进入。
+        用户回答后 --ack success 推进。
+    precheck: []
+    pre_action: []
+    on_success:
+      - goto: 10            # 回到分析，结合新信息重新判断
+    on_failure:
+      - goto: 10
+
+  # ============================================================
+  # VERIFY_AND_REPORT 阶段
+  # ============================================================
+  - seq: 12
+    id: step_fix_code
+    phase: VERIFY_AND_REPORT
+    what: "根据根因分析结果修改业务代码，并加入可证伪的临时验证观测"
+    action: edit_source
+    params:
+      edit_action: fix_bug
+      note: |
+        修改前先 git commit 当前状态，以便回退。
+        修复不能只凭代码阅读判断完成：必须同时设计与根因直接对应的验证条件，
+        并在修复代码附近增加临时检测观测，例如修复前后关键变量/长度/索引/状态/错误码、
+        计数器、超时与重试结果，或不变量断言失败记录。
+        检测必须能区分“原故障已消失”和“只是本轮没有复现”，并覆盖回归风险。
+        这些检测代码与打印同样必须全部使用 CHESHI 包裹；通信层只记录快照/事件，
+        不得直接 printf 或阻塞通信，最终由 main 主循环统一输出。
+        若修复需要调整时序，必须先记录原时序基线，再验证关键间隔、超时和队列行为未被破坏。
+        seq 13~16 必须基于这些观测结果判断，不能仅以编译、下载成功作为修复成功依据。
+    precheck: []
+    pre_action: []
+    on_success:
+      - goto: 13
+    on_failure:
+      - goto: 12
+
+  - seq: 13
+    id: step_verify_build
+    phase: VERIFY_AND_REPORT
+    what: "编译修复后的固件（buildMode=none 时跳过）"
+    action: run_script
+    call: 'python scripts/multi_project_runner.py --action build --config-dir "{project_dir}" --modes {projectInfo.projectModes}'
+    precheck:
+      - assert: 'projectInfo.buildMode != "none"'
+        on_fail:
+          - goto: 16
+      - assert: "debugLoopInfo.compileRetryCount < 5"
+        on_fail:
+          - log:
+              level: error
+              msg: "验证编译失败已达到5次，转入生成报告"
+          - goto: 20
+    pre_action:
+      - update_state:
+          debugLoopInfo.compileRetryCount: "+1"
+    on_success:
+      - update_state:
+          debugLoopInfo.compileRetryCount: 0
+      - goto: 14
+    on_failure:
+      - update_state:
+          debugLoopInfo.iterationCount: "+1"
+          debugLoopInfo.loopReason: "修复后的固件编译未通过，返回定位并修正"
+      - when: "debugLoopInfo.compileRetryCount >= 5"
+        then:
+          - log:
+              level: error
+              msg: "验证阶段连续5次编译失败，转入生成报告"
+          - goto: 20
+        else:
+          - goto: 5
+
+  - seq: 14
+    id: step_verify_flash
+    phase: VERIFY_AND_REPORT
+    what: "下载修复后的固件（仅 buildMode=full 执行）"
+    action: run_script
+    call: 'python scripts/multi_project_runner.py --action flash --config-dir "{project_dir}" --modes {projectInfo.projectModes}'
+    precheck:
+      - assert: 'projectInfo.buildMode == "full"'
+        on_fail:
+          - goto: 16
+    pre_action: []
+    on_success:
+      - log:
+          level: info
+          msg: "修复固件下载成功，开始串口验证"
+      - goto: 15
+    on_failure:
+      - update_state:
+          debugLoopInfo.iterationCount: "+1"
+          debugLoopInfo.loopReason: "修复固件下载失败，返回调试循环重新处理"
+      - goto: 5
+
+  - seq: 15
+    id: step_verify_capture_log
+    phase: VERIFY_AND_REPORT
+    what: "等待10秒后持续读取串口并保存修复验证日志，确认运行期间没有复现问题"
+    action: run_script
+    call: 'python scripts/multi_project_runner.py --action serial --config-dir "{project_dir}" --modes {projectInfo.projectModes} --delay 10 --duration 30 --save "{project_dir}/.copilot/logs/verify_log.txt"'
+    precheck: []
+    pre_action: []
+    on_success:
+      - goto: 16
+    on_failure:
+      - update_state:
+          debugLoopInfo.lastSerialStatus: "failure"
+      - log:
+          level: error
+          msg: "修复验证阶段串口监听失败，流程已暂停"
+      - wait_user: "串口监听失败，流程已暂停；确认串口恢复后可继续"
+
+  - seq: 16
+    id: step_confirm_fix
+    phase: VERIFY_AND_REPORT
+    what: "分析验证日志，确认修复检测条件成立、原故障未复现且没有新增异常"
+    action: analyze
+    params:
+      mode: verify_fix
+      log: "{project_dir}/.copilot/logs/verify_log.txt"
+      note: |
+        buildMode=full 时必须完整读取验证日志，确认观测窗口内修复检测条件成立、
+        原故障未复现、CHESHI 观测值符合预期且无新增错误，才能 --ack success 推进。
+        任何异常或证据不足均 --ack failure，退回 DEBUG_LOOP 重新定位和验证。
+        buildMode=compile_only/none 时只能依据静态分析和编译结果裁决，并在报告中注明未做板端串口验证。
+    precheck: []
+    pre_action: []
+    on_success:
+      - update_state:
+          verifyReport.fixConfirmed: true
+      - goto: 17
+    on_failure:
+      - update_state:
+          verifyReport.fixConfirmed: false
+          debugLoopInfo.iterationCount: "+1"
+          debugLoopInfo.loopReason: "验证证据不足或故障仍然存在，返回调试循环"
+      - goto: 5
+
+  - seq: 17
+    id: step_clean_cheshi
+    phase: VERIFY_AND_REPORT
+    what: "确认故障解决后，删除所有 CHESHI 调试代码块并恢复正式源码"
+    action: edit_source
+    params:
+      edit_action: remove_cheshi
+      require_state: verifyReport.fixConfirmed
+    precheck: []
+    pre_action: []
+    on_success:
+      - update_state:
+          verifyReport.cheshiCleaned: true
+      - goto: 18
+    on_failure:
+      - goto: 17
+
+  - seq: 18
+    id: step_clean_build
+    phase: VERIFY_AND_REPORT
+    what: "清理 CHESHI 后重新编译，确认正式源码仍可通过编译"
+    action: run_script
+    call: 'python scripts/multi_project_runner.py --action build --config-dir "{project_dir}" --modes {projectInfo.projectModes}'
+    precheck:
+      - assert: 'projectInfo.buildMode != "none"'
+        on_fail:
+          - goto: 19
+    pre_action: []
+    on_success:
+      - goto: 19
+    on_failure:
+      - goto: 17
+
+  - seq: 19
+    id: step_regression
+    phase: VERIFY_AND_REPORT
+    what: "确认修复未引入新问题，其他功能模块正常"
+    action: check_regression
+    params:
+      checklist:
+        - "配置完整：config_reader.py --validate 通过（keil/projects/serial/debugger 齐全）"
+        - "串口参数与配置一致：监听端口/波特率取自对应工程的 serial"
+        - "编译输出 0 Error、无阻塞性 Warning"
+        - "固件下载成功：日志出现 Flash Load finished / Verify OK"
+        - "验证日志已保存到 {项目目录}/.copilot/logs/verify_log.txt"
+        - "调试打印信息充分，可支撑故障定位"
+        - "业务修改仅影响目标模块，无连锁副作用（长度/偏移/缓冲区边界已复核）"
+        - "原故障现象消失，其它模块（通信/定时器/中断/外设）正常"
+        - "CHESHI 调试代码已整段清理，清理后重编 0 Error"
+        - "最终版本全量编译下载正常通过"
+    precheck: []
+    pre_action: []
+    on_success:
+      - goto: 20
+    on_failure:
+      - update_state:
+          debugLoopInfo.iterationCount: "+1"
+          debugLoopInfo.loopReason: "回归检查未通过，返回调试循环继续排查"
+      - goto: 5
+
+  - seq: 20
+    id: step_report
+    phase: VERIFY_AND_REPORT
+    what: "生成包含完整证据链的详细报告，写入记忆，并提交推送公司 GitLab"
+    action: report
+    params:
+      report_template: "templates/report.md"
+      report_path: "{skill_dir}/data/reports/{date}_{short_desc}.md"
+      requirements: |
+        必须填写模板全部 11 节，并以当前对话为主线，结合源码、Git 差异、流程状态、
+        编译/下载输出和串口日志形成可追溯证据链。记录失败尝试、排除过程、修复原理、
+        修改符号、验证命令与实际结果、回归风险和未验证事项。未知内容明确写“未提供”或
+        “未验证”，禁止猜测或伪造证据；不得将编译成功等同于故障已解决。
+      report_fields:
+        - conversation_context
+        - environment_and_config
+        - fault_description
+        - reproduction_steps
+        - investigation_timeline
+        - root_cause
+        - evidence_chain
+        - fix_summary
+        - files_changed
+        - verification_logs
+        - verification_limits
+        - regression_risks
+        - follow_up_actions
+      memory_entry:
+        path: "data/debug-history.yaml"
+        format: |
+          - date: "{date}"
+            desc: "{short_desc}"
+            fault: "{fault_description}"
+            root_cause: "{root_cause}"
+            status: "{resolution_status}"
+            verification: "{verification_summary}"
+            report: "{report_path}"
+            source: "workflow"
+      persistent_memory:
+        path: "/memories/embedded-debug-workflow.md"
+        operation: "append_or_update"
+        fields:
+          - date
+          - project_name
+          - fault_description
+          - root_cause
+          - fix_summary
+          - verification_summary
+          - resolution_status
+          - report_path
+        rules: |
+          写入前先查看 /memories/，优先更新已有文件；只保存可复用摘要和报告绝对路径，
+          不复制整篇报告，不保存凭据或大段日志。同一 report_path 不得重复写入。
+      git_publish:
+        call: 'python "{skill_dir}/scripts/git_sync.py" --publish-report "{report_path}" --title "{short_desc}"'
+        remote: "公司仓库"
+        branch: "workflow/report-memory-sync"
+        rules: |
+          报告、data/debug-history.yaml 和持久记忆均写入成功后才能执行。脚本必须成功提交并
+          推送远程；失败时按 on_failure 留在当前步骤，不得进入完成步骤。
+    precheck: []
+    pre_action: []
+    on_success:
+      - update_state:
+          debugSession.reportFile: "{report_path}"
+          debugSession.memorySaved: true
+          debugSession.endTime: "{now}"
+      - goto: 21
+    on_failure:
+      - goto: 20
+
+  - seq: 21
+    id: step_complete
+    phase: VERIFY_AND_REPORT
+    what: "标记全部流程完成"
+    action: exit
+    precheck: []
+    pre_action: []
+    on_success:
+      - goto: done
+    on_failure:
+      - goto: done

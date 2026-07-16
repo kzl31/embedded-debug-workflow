@@ -1,0 +1,14 @@
+# 调试历史索引
+# AI 在 COMPLETED 阶段自动追加条目，作为故障目录索引。
+# 报告详细内容见对应 report 路径的 .md 文件。
+history:
+  - date: "2026-07-08"
+    desc: "SAFEGUARD disc下降修复"
+    fault: "SAFEGUARD disc=431/3043(14.2%) severe=4，数据采集不连续"
+    root_cause: "1) 单槽位事件队列帧覆盖 2) PRIMASK关中断导致UART ORE"
+    report: "debug-reports/2026-07-08_SAFEGUARD-disc下降修复.md"
+  - date: "2026-07-09"
+    desc: "IWDG未喂狗导致反复重启"
+    fault: "程序下载后反复重启（约2秒周期），IWDG已启用"
+    root_cause: "Iwdg_Init()无条件运行且主循环无Iwdg_Feed()喂狗调用，看门狗超时→MCU复位→反复重启"
+    report: ".copilot/报告/2026-07-09_IWDG未喂狗导致反复重启.md"

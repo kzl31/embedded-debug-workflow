@@ -1,0 +1,10 @@
+# Python bytecode and local tool caches
+__pycache__/
+*.py[cod]
+
+# Workflow runtime state and per-workspace configuration
+.copilot/
+
+# Internal generated patch/index artifacts
+scripts/.gate_index/
+scripts/__patch*.tmp
