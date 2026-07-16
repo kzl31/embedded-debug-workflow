@@ -16,7 +16,7 @@ from keil_build import build_project, find_uv4
 from keil_flash import flash_project
 from serial_monitor import monitor_serial
 
-VALID_MODES = {"full", "compile_only", "none"}
+VALID_MODES = {"full", "compile_flash", "compile_only", "none"}
 
 
 def parse_modes(raw: str, project_count: int) -> list[str]:
@@ -33,7 +33,10 @@ def parse_modes(raw: str, project_count: int) -> list[str]:
 
 def selected_indices(action: str, modes: list[str]) -> list[int]:
     if action == "build":
-        return [i for i, mode in enumerate(modes) if mode in {"full", "compile_only"}]
+        return [i for i, mode in enumerate(modes)
+                if mode in {"full", "compile_flash", "compile_only"}]
+    if action == "flash":
+        return [i for i, mode in enumerate(modes) if mode in {"full", "compile_flash"}]
     return [i for i, mode in enumerate(modes) if mode == "full"]
 
 

@@ -185,7 +185,7 @@ def _default_flow_gate() -> dict:
             "hardwareReady": False,
             "faultDescribed": False,
             "configConfirmed": False,
-            "buildMode": "none"
+            "buildMode": ""
         },
         "debugLoopInfo": {
             "iterationCount": 0,
