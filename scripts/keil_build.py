@@ -78,7 +78,7 @@ def build_project(
     """执行 Keil 编译，返回结果字典。
 
     UV4 的 ``-o`` 参数会在编译过程中写入日志文件。直接等待编译进程
-    结束，不设置总编译时限；若日志连续 60 秒没有新增内容，则认为
+    结束，不设置总编译时限；若日志连续 3 分钟没有新增内容，则认为
     编译卡死/失败并终止 UV4。
     """
     proj_dir = Path(project_dir)
@@ -106,7 +106,7 @@ def build_project(
     print(f"[keil_build]   命令: {cmd}")
 
     # 日志无输出看门狗：用于识别 UV4 启动后卡死、等待不可见对话框等情况。
-    idle_timeout = 60.0
+    idle_timeout = 180.0
     start_time = time.monotonic()
     last_output_time = start_time
     previous_log_state: tuple[int, int] | None = None
@@ -205,7 +205,7 @@ def build_project(
         result_dict["error_lines"] = error_lines[:20]  # 最多前20条错误
 
     if timed_out and not summary_line:
-        result_dict["summary"] = "编译失败：日志连续60秒无新增输出"
+        result_dict["summary"] = "编译失败：日志连续180秒无新增输出"
     elif return_code != 0 and not summary_line:
         result_dict["summary"] = f"编译进程异常退出，返回码: {return_code}"
 
