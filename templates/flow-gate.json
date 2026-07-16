@@ -14,11 +14,14 @@
     "initialQuestionsAnswered": false,
     "projectCount": 0,
     "projectModes": "",
+    "hasBuildProjects": false,
+    "hasFlashProjects": false,
+    "hasSerialProjects": false,
+    "projectRuns": [],
     "serialConfirmed": false,
     "hardwareReady": false,
     "faultDescribed": false,
-    "configConfirmed": false,
-    "buildMode": ""
+    "configConfirmed": false
   },
   "debugLoopInfo": {
     "iterationCount": 0,

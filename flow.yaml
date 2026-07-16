@@ -113,7 +113,6 @@ steps:
           - --set projectInfo.currentProjectIndex=<当前文档所属项目在 projects 数组中的下标>
           - --set projectInfo.projectModes=<按项目下标排列的逗号分隔模式，如 compile_only,compile_flash>
           - --set projectInfo.configConfirmed=<true|false>
-          - --set projectInfo.buildMode=<聚合模式：任一full则full；否则任一compile_flash则compile_flash；否则任一compile_only则compile_only；全none则none>
           - --ack success 推进。
         先根据当前文档所属工程确定 currentProjectIndex；无法唯一确定时必须询问用户，禁止
         默认猜测。
@@ -196,13 +195,13 @@ steps:
     precheck: []
     pre_action: []
     on_success:
-      - when: 'projectInfo.buildMode == "full"'
+      - when: 'projectInfo.hasSerialProjects == true'
         then:
           - goto: 6
         else:
           - log:
               level: info
-              msg: "未下载固件（buildMode≠full），跳过插入 CHESHI 调试打印"
+              msg: "没有 full 模式项目，跳过插入 CHESHI 调试打印"
           - goto: 7
     on_failure:
       - goto: 5
@@ -210,7 +209,7 @@ steps:
   - seq: 6
     id: step_add_cheshi
     phase: DEBUG_LOOP
-    what: "在可疑位置补充充分的 CHESHI 调试观测（仅 buildMode=full 时执行；允许为采集信息适当修改代码，严禁停下）"
+    what: "仅对 mode=full 的项目在可疑位置补充充分的 CHESHI 调试观测；允许为采集信息适当修改代码，严禁停下"
     action: edit_source
     params:
       edit_action: insert_cheshi
@@ -242,9 +241,9 @@ steps:
     phase: DEBUG_LOOP
     what: "编译固件"
     action: run_script
-    call: 'python scripts/multi_project_runner.py --action build --config-dir "{project_dir}" --modes {projectInfo.projectModes}'
+    call: 'python scripts/multi_project_runner.py --action build --stage debug_build_{debugLoopInfo.iterationCount} --config-dir "{project_dir}" --modes {projectInfo.projectModes}'
     precheck:
-      - assert: 'projectInfo.buildMode != "none"'
+      - assert: 'projectInfo.hasBuildProjects == true'
         on_fail:
           - goto: 19
       - assert: "debugLoopInfo.compileRetryCount < 5"
@@ -262,11 +261,11 @@ steps:
       - update_state:
           debugLoopInfo.lastBuildStatus: "success"
           debugLoopInfo.compileRetryCount: 0
-      - when: 'projectInfo.buildMode == "compile_only"'
+      - when: 'projectInfo.hasFlashProjects == true'
         then:
-          - goto: 19
-        else:
           - goto: 8
+        else:
+          - goto: 19
     on_failure:
       - update_state:
           debugLoopInfo.lastBuildStatus: "failure"
@@ -289,8 +288,11 @@ steps:
     phase: DEBUG_LOOP
     what: "下载固件到目标板"
     action: run_script
-    call: 'python scripts/multi_project_runner.py --action flash --config-dir "{project_dir}" --modes {projectInfo.projectModes}'
+    call: 'python scripts/multi_project_runner.py --action flash --stage debug_flash_{debugLoopInfo.iterationCount} --config-dir "{project_dir}" --modes {projectInfo.projectModes}'
     precheck:
+      - assert: 'projectInfo.hasFlashProjects == true'
+        on_fail:
+          - goto: 19
       - assert: "debugLoopInfo.retryCount < 2"
         on_fail:
           - log:
@@ -306,7 +308,7 @@ steps:
       - update_state:
           debugLoopInfo.lastFlashStatus: "success"
           debugLoopInfo.retryCount: 0
-      - when: 'projectInfo.buildMode == "full"'
+      - when: 'projectInfo.hasSerialProjects == true'
         then:
           - goto: 9
         else:
@@ -330,7 +332,7 @@ steps:
     phase: DEBUG_LOOP
     what: "等待10秒后启动串口监听，捕获日志（仅编译下载监听模式会到达本步）"
     action: run_script
-    call: 'python scripts/multi_project_runner.py --action serial --config-dir "{project_dir}" --modes {projectInfo.projectModes} --delay 10 --duration 30 --save "{project_dir}/.copilot/logs/debug_log.txt"'
+    call: 'python scripts/multi_project_runner.py --action serial --stage debug_serial_{debugLoopInfo.iterationCount} --config-dir "{project_dir}" --modes {projectInfo.projectModes} --delay 10 --duration 30 --save "{project_dir}/.copilot/logs/debug_log.txt"'
     precheck: []
     pre_action: []
     on_success:
@@ -450,11 +452,11 @@ steps:
   - seq: 13
     id: step_verify_build
     phase: VERIFY_AND_REPORT
-    what: "编译修复后的固件（buildMode=none 时跳过）"
+    what: "逐项目编译修复后的固件（mode=none 的项目跳过）"
     action: run_script
-    call: 'python scripts/multi_project_runner.py --action build --config-dir "{project_dir}" --modes {projectInfo.projectModes}'
+    call: 'python scripts/multi_project_runner.py --action build --stage verify_build_{debugLoopInfo.iterationCount} --config-dir "{project_dir}" --modes {projectInfo.projectModes}'
     precheck:
-      - assert: 'projectInfo.buildMode != "none"'
+      - assert: 'projectInfo.hasBuildProjects == true'
         on_fail:
           - goto: 16
       - assert: "debugLoopInfo.compileRetryCount < 5"
@@ -471,7 +473,11 @@ steps:
     on_success:
       - update_state:
           debugLoopInfo.compileRetryCount: 0
-      - goto: 14
+      - when: 'projectInfo.hasFlashProjects == true'
+        then:
+          - goto: 14
+        else:
+          - goto: 16
     on_failure:
       - update_state:
           debugLoopInfo.iterationCount: "+1"
@@ -490,19 +496,23 @@ steps:
   - seq: 14
     id: step_verify_flash
     phase: VERIFY_AND_REPORT
-    what: "下载修复后的固件（仅 buildMode=full 执行）"
+    what: "逐项目下载修复后的固件（仅 compile_flash/full 项目执行）"
     action: run_script
-    call: 'python scripts/multi_project_runner.py --action flash --config-dir "{project_dir}" --modes {projectInfo.projectModes}'
+    call: 'python scripts/multi_project_runner.py --action flash --stage verify_flash_{debugLoopInfo.iterationCount} --config-dir "{project_dir}" --modes {projectInfo.projectModes}'
     precheck:
-      - assert: 'projectInfo.buildMode == "full"'
+      - assert: 'projectInfo.hasFlashProjects == true'
         on_fail:
           - goto: 16
     pre_action: []
     on_success:
-      - log:
-          level: info
-          msg: "修复固件下载成功，开始串口验证"
-      - goto: 15
+      - when: 'projectInfo.hasSerialProjects == true'
+        then:
+          - log:
+              level: info
+              msg: "full 模式项目下载成功，开始串口验证"
+          - goto: 15
+        else:
+          - goto: 16
     on_failure:
       - log:
           level: error
@@ -514,7 +524,7 @@ steps:
     phase: VERIFY_AND_REPORT
     what: "等待10秒后持续读取串口并保存修复验证日志，确认运行期间没有复现问题"
     action: run_script
-    call: 'python scripts/multi_project_runner.py --action serial --config-dir "{project_dir}" --modes {projectInfo.projectModes} --delay 10 --duration 30 --save "{project_dir}/.copilot/logs/verify_log.txt"'
+    call: 'python scripts/multi_project_runner.py --action serial --stage verify_serial_{debugLoopInfo.iterationCount} --config-dir "{project_dir}" --modes {projectInfo.projectModes} --delay 10 --duration 30 --save "{project_dir}/.copilot/logs/verify_log.txt"'
     precheck: []
     pre_action: []
     on_success:
@@ -536,10 +546,11 @@ steps:
       mode: verify_fix
       log: "{project_dir}/.copilot/logs/verify_log.txt"
       note: |
-        buildMode=full 时必须完整读取验证日志，确认观测窗口内修复检测条件成立、
+        mode=full 的项目必须分别读取其验证日志，确认观测窗口内修复检测条件成立、
         原故障未复现、CHESHI 观测值符合预期且无新增错误，才能 --ack success 推进。
         任何异常或证据不足均 --ack failure，退回 DEBUG_LOOP 重新定位和验证。
-        buildMode=compile_only/none 时只能依据静态分析和编译结果裁决，并在报告中注明未做板端串口验证。
+        compile_flash 项目只能确认编译和下载；compile_only 项目只能确认编译；none 项目未执行。
+        必须根据 projectInfo.projectRuns 逐项目记录验证等级，禁止把 full 项目的板端结论扩展到其他项目。
     precheck: []
     pre_action: []
     on_success:
@@ -578,9 +589,9 @@ steps:
     phase: VERIFY_AND_REPORT
     what: "清理 CHESHI 后重新编译，确认正式源码仍可通过编译"
     action: run_script
-    call: 'python scripts/multi_project_runner.py --action build --config-dir "{project_dir}" --modes {projectInfo.projectModes}'
+    call: 'python scripts/multi_project_runner.py --action build --stage clean_build --config-dir "{project_dir}" --modes {projectInfo.projectModes}'
     precheck:
-      - assert: 'projectInfo.buildMode != "none"'
+      - assert: 'projectInfo.hasBuildProjects == true'
         on_fail:
           - when: "debugLoopInfo.iterationExhausted == true"
             then:
