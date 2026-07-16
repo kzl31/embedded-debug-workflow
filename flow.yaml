@@ -251,9 +251,9 @@ steps:
         on_fail:
           - log:
               level: error
-            msg: "编译失败已达到5次，流程暂停；调整后将重新编译"
+              msg: "编译失败已达到5次，流程暂停；调整后将重新编译"
           - update_state:
-            debugLoopInfo.compileRetryCount: 0
+              debugLoopInfo.compileRetryCount: 0
           - wait_user: "连续5次编译失败。请调整源码或编译环境，确认后恢复流程，流程将从本编译步骤重试。"
     pre_action:
       - update_state:
@@ -295,9 +295,9 @@ steps:
         on_fail:
           - log:
               level: error
-            msg: "retryCount ≥ 2，流程暂停；调整后将重新下载"
+              msg: "retryCount ≥ 2，流程暂停；调整后将重新下载"
           - update_state:
-            debugLoopInfo.retryCount: 0
+              debugLoopInfo.retryCount: 0
           - wait_user: "连续2次下载失败。请调整目标板、下载器或连接，确认后恢复流程，流程将从本下载步骤重试。"
     pre_action:
       - update_state:
@@ -461,9 +461,9 @@ steps:
         on_fail:
           - log:
               level: error
-            msg: "验证编译失败已达到5次，流程暂停；调整后将重新编译"
+              msg: "验证编译失败已达到5次，流程暂停；调整后将重新编译"
           - update_state:
-            debugLoopInfo.compileRetryCount: 0
+              debugLoopInfo.compileRetryCount: 0
           - wait_user: "修复后的固件连续5次编译失败。请调整源码或编译环境，确认后恢复流程，流程将从本编译步骤重试。"
     pre_action:
       - update_state:
