@@ -18,7 +18,7 @@ from pathlib import Path
 _SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPT_DIR))
 from config_reader import load_config, get_keil_path, get_projects
-from keil_build import build_project
+from keil_build import build_project, _workspace_dir
 from keil_flash import flash_project
 
 
@@ -72,6 +72,7 @@ def main() -> None:
                 project_dir=proj_dir,
                 project_file=proj_file,
                 target=args.target,
+                workspace_dir=str(_workspace_dir(args.config_dir, config)),
             )
             if build_result["status"] == "failure":
                 print(f"   ❌ 编译失败")

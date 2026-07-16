@@ -58,13 +58,17 @@ def find_uv4(config: dict | None = None) -> str | None:
     return None
 
 
-def _logs_dir(proj_dir: Path) -> Path:
-    """定位 <workspace>/.copilot/logs：从工程目录向上查找含 .copilot 的目录。"""
-    p = proj_dir.resolve()
-    for cand in [p, *p.parents]:
-        if (cand / ".copilot").is_dir():
-            return cand / ".copilot" / "logs"
-    return p.parent / ".copilot" / "logs"
+def _workspace_dir(config_dir: str | None, config: dict) -> Path:
+    """解析显式工作区根目录，不从 Keil 工程目录向上猜测。"""
+    configured = config.get("workspace")
+    if configured:
+        return Path(configured).resolve()
+    if config_dir:
+        path = Path(config_dir).resolve()
+        if path.is_file() or path.name == "embedded-debug-config.json":
+            return path.parent.parent if path.parent.name == ".copilot" else path.parent
+        return path
+    return Path.cwd().resolve()
 
 
 def build_project(
@@ -74,6 +78,7 @@ def build_project(
     target: str | None = None,
     rebuild: bool = False,
     log_file: str | None = None,
+    workspace_dir: str | None = None,
 ) -> dict:
     """执行 Keil 编译，返回结果字典。
 
@@ -91,7 +96,10 @@ def build_project(
         }
 
     # 构建命令
-    log_path = log_file or str(_logs_dir(proj_dir) / "build_log.txt")
+    # 默认日志必须直接落在工作区根目录。禁止通过工程目录中的 .copilot
+    # 反向推断工作区，否则残留的嵌套 .copilot 会把日志写到错误位置。
+    workspace = Path(workspace_dir).resolve() if workspace_dir else Path.cwd().resolve()
+    log_path = log_file or str(workspace / "build_log.txt")
     Path(log_path).parent.mkdir(parents=True, exist_ok=True)
     # 每次编译使用空日志，避免上一次残留内容被误判为本次实时输出。
     Path(log_path).write_text("", encoding="utf-8")
@@ -103,6 +111,7 @@ def build_project(
         cmd += f' -t "{target}"'
 
     print(f"[keil_build] 🔨 编译: {project_file}")
+    print(f"[keil_build]   完整日志: {log_path}")
     print(f"[keil_build]   命令: {cmd}")
 
     # 日志无输出看门狗：用于识别 UV4 启动后卡死、等待不可见对话框等情况。
@@ -132,7 +141,7 @@ def build_project(
             if log_state != previous_log_state:
                 previous_log_state = log_state
                 last_output_time = now
-                if log_state:
+                if log_state and log_state[0] > 0:
                     print(
                         f"[keil_build]   编译日志已更新: {log_state[0]} bytes",
                         flush=True,
@@ -193,6 +202,7 @@ def build_project(
     result_dict = {
         "status": status,
         "summary": summary_line or f"错误: {errors}  警告: {warnings}",
+        "log_file": str(Path(log_path).resolve()),
         "project_file": project_file,
         "target_name": target or "默认",
         "errors": errors,
@@ -295,6 +305,7 @@ def main() -> None:
         target=args.target,
         rebuild=args.rebuild,
         log_file=args.log,
+        workspace_dir=str(_workspace_dir(args.config_dir, config)),
     )
 
     if result["status"] == "failure":

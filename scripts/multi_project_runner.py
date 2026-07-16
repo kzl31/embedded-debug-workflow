@@ -14,7 +14,7 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPT_DIR))
 
 from config_reader import get_keil_path, get_projects, get_serial_config, load_config
-from keil_build import build_project, find_uv4
+from keil_build import build_project, find_uv4, _workspace_dir
 from keil_flash import flash_project
 from serial_monitor import monitor_serial
 
@@ -184,7 +184,12 @@ def main() -> None:
                 })
                 continue
             result = (
-                build_project(uv4, project_dir, project_file)
+                build_project(
+                    uv4,
+                    project_dir,
+                    project_file,
+                    workspace_dir=str(_workspace_dir(args.config_dir, config)),
+                )
                 if args.action == "build"
                 else flash_project(uv4, project_dir, project_file)
             )

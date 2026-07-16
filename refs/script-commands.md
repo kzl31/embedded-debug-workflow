@@ -18,6 +18,10 @@ python scripts/build_and_flash.py
 python scripts/serial_monitor.py --duration 15 --save .copilot/logs/output.log
 ```
 
+Keil 的完整编译输出固定保存为工作区根目录下的 `build_log.txt`。日志位置仅由
+`--config-dir` 指定的工作区（或配置中的 `workspace`）决定，不会扫描工程子目录中的
+`.copilot`。需要自定义位置时可显式传入 `--log <路径>`。
+
 ## 脚本索引
 
 ### Python 版（首选）

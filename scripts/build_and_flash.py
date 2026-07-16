@@ -19,7 +19,7 @@ from pathlib import Path
 _SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPT_DIR))
 from config_reader import load_config, get_project
-from keil_build import find_uv4 as find_uv4_build, build_project
+from keil_build import find_uv4 as find_uv4_build, build_project, _workspace_dir
 from keil_flash import find_uv4 as find_uv4_flash, flash_project
 
 
@@ -71,6 +71,7 @@ def main() -> None:
         target=args.target,
         rebuild=args.rebuild,
         log_file=args.build_log,
+        workspace_dir=str(_workspace_dir(args.config_dir, config)),
     )
 
     if build_result["status"] == "failure":
