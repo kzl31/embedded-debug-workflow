@@ -142,7 +142,7 @@ python "{{SKILL_DIR}}\scripts\workflow_engine.py" --project "<项目根目录>" 
 
 > 列表里出现 `goto` / `exit` / `wait_user` 即终止；若没有跳转动作，引擎默认推进到 `seq+1`。
 
-**条件语法**：`section.field <op> 值`，如 `debugLoopInfo.retryCount < 2`、`projectInfo.buildMode == "full"`；
+**条件语法**：`section.field <op> 值`，如 `debugLoopInfo.retryCount < 2`、`projectInfo.hasSerialProjects == true`；
 支持 `== != < > <= >=`，数值/字符串自动判断。
 
 新增/修改步骤详见 `refs/add-flow-guide.md`，完整流程图见 `refs/workflow-diagram.md`。

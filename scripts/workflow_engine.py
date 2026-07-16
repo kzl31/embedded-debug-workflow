@@ -33,7 +33,7 @@ workflow_engine.py — 嵌入式调试工作流「单文件线性序号驱动」
       重置为新任务
 
   python workflow_engine.py --project <项目目录> --set KEY=VALUE
-      写入状态字段（点号语法，如 --set projectInfo.buildMode=full）
+      写入状态字段（点号语法，如 --set projectInfo.projectModes=full,compile_only）
 
 依赖：pip install pyyaml
 """
@@ -71,6 +71,7 @@ FLOW_YAML_PATH = SKILL_DIR / "flow.yaml"
 TEMPLATES_DIR = SKILL_DIR / "templates"
 STATE_DIR = ".copilot/.54188"
 FLOW_GATE_FILENAME = "flow-gate.json"
+PROJECT_RESULTS_FILENAME = "project-results.json"
 
 # 动作类型分类
 AUTO_TYPES = {"run_script", "check_file", "read_config", "noop", "exit", "update_state"}
@@ -148,6 +149,10 @@ def get_flow_gate_path(project_dir: str) -> Path:
     return Path(project_dir) / STATE_DIR / FLOW_GATE_FILENAME
 
 
+def get_project_results_path(project_dir: str) -> Path:
+    return Path(project_dir) / STATE_DIR / PROJECT_RESULTS_FILENAME
+
+
 def load_flow_gate(project_dir: str) -> dict:
     path = get_flow_gate_path(project_dir)
     if path.exists():
@@ -201,11 +206,14 @@ def _default_flow_gate() -> dict:
             "sourcePreAnalyzed": False,
             "projectCount": 0,
             "projectModes": "",
+            "hasBuildProjects": False,
+            "hasFlashProjects": False,
+            "hasSerialProjects": False,
+            "projectRuns": [],
             "serialConfirmed": False,
             "hardwareReady": False,
             "faultDescribed": False,
-            "configConfirmed": False,
-            "buildMode": ""
+            "configConfirmed": False
         },
         "debugLoopInfo": {
             "iterationCount": 0,
@@ -449,9 +457,40 @@ class WorkflowEngine:
                 continue
             key, raw_value = item.split("=", 1)
             value = parse_state_value(raw_value)
-            self._apply_update_state({key: value})
+            if key == "projectInfo.projectModes":
+                self._sync_project_modes(str(value))
+            else:
+                self._apply_update_state({key: value})
             applied[key] = value
         return self._result("state_set", f"已更新状态: {applied}", applied=applied)
+
+    def _sync_project_modes(self, raw_modes: str) -> None:
+        """根据逐项目模式生成能力标志和独立运行状态。"""
+        modes = [item.strip() for item in raw_modes.split(",") if item.strip()]
+        valid_modes = {"none", "compile_only", "compile_flash", "full"}
+        invalid = [mode for mode in modes if mode not in valid_modes]
+        if invalid:
+            raise ValueError(f"无效项目模式: {', '.join(invalid)}")
+        project_count = int(self.fg.get("projectInfo", {}).get("projectCount") or 0)
+        if project_count and len(modes) != project_count:
+            raise ValueError(
+                f"项目模式数量({len(modes)})与 projectCount({project_count})不一致")
+
+        project_info = self.fg.setdefault("projectInfo", {})
+        project_info["projectModes"] = raw_modes
+        project_info["hasBuildProjects"] = any(mode != "none" for mode in modes)
+        project_info["hasFlashProjects"] = any(
+            mode in {"compile_flash", "full"} for mode in modes)
+        project_info["hasSerialProjects"] = any(mode == "full" for mode in modes)
+        project_info["projectRuns"] = [
+            {
+                "index": index,
+                "mode": mode,
+                "stages": {},
+            }
+            for index, mode in enumerate(modes)
+        ]
+        save_flow_gate(self.project_dir, self.fg)
 
     # ── 驱动循环 ────────────────────────────────────────────────
 
@@ -635,6 +674,7 @@ class WorkflowEngine:
             result = subprocess.run(cmd, shell=True, cwd=str(SKILL_DIR),
                                     timeout=600, env=child_env,
                                     stdin=subprocess.DEVNULL)
+            self._merge_project_results()
             ok = result.returncode == 0
             print(f"[exec] {'✅' if ok else '❌'} 退出码 {result.returncode}", file=sys.stdout)
             return ok
@@ -644,6 +684,40 @@ class WorkflowEngine:
         except Exception as e:
             print(f"[exec] ❌ 异常: {e}", file=sys.stderr)
             return False
+
+    def _merge_project_results(self) -> None:
+        """将多项目执行器写出的逐项目阶段结果合并到流程状态。"""
+        result_path = get_project_results_path(self.project_dir)
+        if not result_path.is_file():
+            return
+        try:
+            payload = load_json(result_path)
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"[workflow_engine] ⚠️ 逐项目结果读取失败: {exc}", file=sys.stderr)
+            return
+        stage = payload.get("latestStage", "unknown")
+        stage_result = payload.get("stages", {}).get(stage, {})
+        results = stage_result.get("projects", [])
+        runs = self.fg.setdefault("projectInfo", {}).setdefault("projectRuns", [])
+        by_index = {item.get("index"): item for item in runs if isinstance(item, dict)}
+        for result in results:
+            index = result.get("index")
+            if not isinstance(index, int):
+                continue
+            run = by_index.setdefault(index, {
+                "index": index,
+                "mode": result.get("mode", "none"),
+                "stages": {},
+            })
+            run["name"] = result.get("name", run.get("name", ""))
+            run.setdefault("stages", {})[stage] = {
+                "action": stage_result.get("action", ""),
+                "status": result.get("status", "unknown"),
+                "summary": result.get("summary", ""),
+                "artifact": result.get("artifact"),
+            }
+        self.fg["projectInfo"]["projectRuns"] = [by_index[key] for key in sorted(by_index)]
+        save_flow_gate(self.project_dir, self.fg)
 
     def _check_file(self, params: dict) -> bool:
         target = params.get("target", "")
@@ -727,7 +801,11 @@ class WorkflowEngine:
         if not m:
             return True
         path, op, raw = m.group(1), m.group(2), m.group(3).strip()
-        raw_val = raw.strip('"').strip("'")
+        if ((raw.startswith('"') and raw.endswith('"'))
+                or (raw.startswith("'") and raw.endswith("'"))):
+            raw_val: Any = raw[1:-1]
+        else:
+            raw_val = parse_state_value(raw)
         actual = self._get_path(path)
         try:
             a = float(actual)
@@ -735,7 +813,7 @@ class WorkflowEngine:
             return self._cmp(op, a, b)
         except (ValueError, TypeError):
             pass
-        return self._cmp(op, str(actual), raw_val)
+        return self._cmp(op, actual, raw_val)
 
     @staticmethod
     def _cmp(op: str, a: Any, b: Any) -> bool:
@@ -813,7 +891,7 @@ def main():
   python workflow_engine.py --project "e:\\proj" --done            # = --ack success
   python workflow_engine.py --project "e:\\proj" --wake            # 从暂停恢复
   python workflow_engine.py --project "e:\\proj" --reset           # 重置
-  python workflow_engine.py --project "e:\\proj" --set projectInfo.buildMode=full
+    python workflow_engine.py --project "e:\\proj" --set projectInfo.projectModes=full,compile_only
         """)
     parser.add_argument("--project", "-p", required=True, help="项目根目录")
     parser.add_argument("--init", action="store_true", help="初始化工作流（新对话必须先执行）")

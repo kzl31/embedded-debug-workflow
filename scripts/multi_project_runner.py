@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -48,12 +50,78 @@ def project_log_path(base: str | None, index: int, name: str) -> str | None:
     return str(path.with_name(f"{path.stem}_p{index}_{safe_name}{path.suffix}"))
 
 
+def write_project_results(
+    config_dir: str,
+    action: str,
+    stage: str,
+    results: list[dict],
+) -> Path:
+    """原子写出本次逐项目执行结果，供工作流引擎合并。"""
+    config_path = Path(config_dir).resolve()
+    workspace = (
+        config_path if config_path.is_dir()
+        else (config_path.parent.parent if config_path.parent.name == ".copilot"
+              else config_path.parent)
+    )
+    result_path = workspace / ".copilot" / ".54188" / "project-results.json"
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict = {"stages": {}}
+    if result_path.is_file():
+        try:
+            existing = json.loads(result_path.read_text(encoding="utf-8"))
+            if isinstance(existing.get("stages"), dict):
+                payload = existing
+        except (json.JSONDecodeError, OSError):
+            pass
+    previous_projects = {
+        item.get("index"): item
+        for item in payload["stages"].get(stage, {}).get("projects", [])
+        if isinstance(item, dict) and isinstance(item.get("index"), int)
+    }
+    previous_projects.update({item["index"]: item for item in results})
+    payload["latestStage"] = stage
+    payload["stages"][stage] = {
+        "action": action,
+        "updatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "projects": [previous_projects[index] for index in sorted(previous_projects)],
+    }
+    tmp = result_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(result_path)
+    return result_path
+
+
+def successful_indices(config_dir: str, stage: str) -> set[int]:
+    """读取同一阶段已成功的项目下标，用于失败重试时只执行失败项目。"""
+    config_path = Path(config_dir).resolve()
+    workspace = (
+        config_path if config_path.is_dir()
+        else (config_path.parent.parent if config_path.parent.name == ".copilot"
+              else config_path.parent)
+    )
+    result_path = workspace / ".copilot" / ".54188" / "project-results.json"
+    if not result_path.is_file():
+        return set()
+    try:
+        payload = json.loads(result_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return set()
+    return {
+        item["index"]
+        for item in payload.get("stages", {}).get(stage, {}).get("projects", [])
+        if item.get("status") in {"success", "ok"}
+        and isinstance(item.get("index"), int)
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="按逐项目模式执行嵌入式任务")
     parser.add_argument("--action", required=True, choices=["build", "flash", "serial"])
     parser.add_argument("--config-dir", required=True, help="工作区或配置文件路径")
     parser.add_argument("--modes", required=True,
                         help="与 projects 顺序一致的逗号分隔模式")
+    parser.add_argument("--stage", default="",
+                        help="写入逐项目状态时使用的流程阶段标识")
     parser.add_argument("--duration", type=float, default=30.0)
     parser.add_argument("--delay", type=float, default=0.0,
                         help="串口监听开始前的等待时间（秒），默认不等待")
@@ -72,9 +140,17 @@ def main() -> None:
         print(f"❌ {exc}")
         sys.exit(1)
 
+    stage = args.stage or args.action
     indices = selected_indices(args.action, modes)
+    completed_indices = successful_indices(args.config_dir, stage)
+    skipped_indices = [index for index in indices if index in completed_indices]
+    indices = [index for index in indices if index not in completed_indices]
+    if skipped_indices:
+        print(f"ℹ️ stage={stage} 跳过已成功项目: {skipped_indices}")
     if not indices:
         print(f"ℹ️ action={args.action} 没有需要执行的项目，已跳过")
+        write_project_results(args.config_dir, args.action,
+                              stage, [])
         return
 
     uv4 = None
@@ -90,6 +166,7 @@ def main() -> None:
         time.sleep(args.delay)
 
     failures: list[str] = []
+    project_results: list[dict] = []
     for index in indices:
         project = projects[index]
         name = str(project.get("name") or f"project{index + 1}")
@@ -99,7 +176,12 @@ def main() -> None:
             project_dir = str(project.get("dir", ""))
             project_file = str(project.get("file", ""))
             if not project_dir or not project_file:
-                failures.append(f"[{index}] {name}: dir/file 未配置")
+                summary = "dir/file 未配置"
+                failures.append(f"[{index}] {name}: {summary}")
+                project_results.append({
+                    "index": index, "name": name, "mode": modes[index],
+                    "status": "failure", "summary": summary,
+                })
                 continue
             result = (
                 build_project(uv4, project_dir, project_file)
@@ -121,6 +203,21 @@ def main() -> None:
 
         if result.get("status") not in {"success", "ok"}:
             failures.append(f"[{index}] {name}: {result.get('summary') or result.get('error') or '执行失败'}")
+        project_results.append({
+            "index": index,
+            "name": name,
+            "mode": modes[index],
+            "status": result.get("status", "unknown"),
+            "summary": result.get("summary") or result.get("error") or "",
+            "artifact": (
+                project_log_path(args.save, index, name)
+                if args.action == "serial" else None
+            ),
+        })
+
+    result_path = write_project_results(
+        args.config_dir, args.action, stage, project_results)
+    print(f"[multi_project_runner] 逐项目结果: {result_path}")
 
     if failures:
         print("\n❌ 部分项目执行失败:")
