@@ -33,6 +33,8 @@ call: python "{skill_dir}/scripts/git_sync.py" --sync
 - 仓库根目录必须是 `{skill_dir}` 本身；Skill 被复制到 Agent 环境后，`SKILL.md`、`flow.yaml`、
   `scripts/`、`data/` 等内容必须直接位于仓库根部，禁止再套一层 `embedded-debug-workflow/`。
 - 本机对应仓库路径为 `C:\Users\CDYFZX\Desktop\自动化流程\embedded-debug-workflow`。
+- `{skill_dir}/.git` 不存在时，脚本会直接在 `{skill_dir}` 初始化仓库，并以远程专用分支内容
+  建立工作树；不会把仓库初始化到 Agent 目录或工作区的上一级。
 - 同步失败、存在冲突或已跟踪文件有未提交改动时立即停止，不得使用旧内容继续初始化。
 
 ### Step 3: 直接运行初始化脚本

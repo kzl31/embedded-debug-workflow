@@ -34,8 +34,14 @@ def run_git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedP
     return result
 
 
-def get_repo(skill_dir: Path) -> Path:
-    repo = Path(run_git(skill_dir, "rev-parse", "--show-toplevel").stdout.strip()).resolve()
+def get_repo(skill_dir: Path, initialize: bool = False) -> Path:
+    result = run_git(skill_dir, "rev-parse", "--show-toplevel", check=False)
+    if result.returncode != 0:
+        if not initialize:
+            raise GitSyncError(f"Skill 目录尚未初始化 Git 仓库：{skill_dir}")
+        run_git(skill_dir, "init")
+        result = run_git(skill_dir, "rev-parse", "--show-toplevel")
+    repo = Path(result.stdout.strip()).resolve()
     expected = skill_dir.resolve()
     if repo != expected:
         raise GitSyncError(f"仓库根目录应为 {expected}，实际为 {repo}")
@@ -58,16 +64,18 @@ def ensure_remote(repo: Path, remote: str, remote_url: str) -> None:
 
 
 def sync_repository(repo: Path, remote: str, remote_url: str, branch: str) -> dict[str, str]:
-    ensure_clean_for_checkout(repo)
     ensure_remote(repo, remote, remote_url)
     run_git(repo, "fetch", remote, "--prune")
     local_ref = f"refs/heads/{branch}"
     remote_ref = f"refs/remotes/{remote}/{branch}"
 
     if ref_exists(repo, local_ref):
+        ensure_clean_for_checkout(repo)
         run_git(repo, "checkout", branch)
     elif ref_exists(repo, remote_ref):
-        run_git(repo, "checkout", "--track", "-b", branch, f"{remote}/{branch}")
+        # Agent 首次部署时目录已有 Skill 文件但没有 Git 元数据，强制以远程分支为准建立工作树。
+        run_git(repo, "checkout", "--force", "-B", branch, f"{remote}/{branch}")
+        run_git(repo, "branch", "--set-upstream-to", f"{remote}/{branch}", branch)
     else:
         raise GitSyncError(f"远程分支 {remote}/{branch} 不存在，无法获取 Skill 根目录内容")
 
@@ -134,7 +142,7 @@ def main() -> int:
 
     skill_dir = Path(__file__).resolve().parent.parent
     try:
-        repo = get_repo(skill_dir)
+        repo = get_repo(skill_dir, initialize=args.sync)
         result = (
             sync_repository(repo, args.remote, args.remote_url, args.branch)
             if args.sync
