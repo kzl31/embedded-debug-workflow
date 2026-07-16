@@ -77,11 +77,14 @@ python "{{SKILL_DIR}}\scripts\workflow_engine.py" --project "<项目根目录>" 
 | `/kzl 编译` | 仅编译（不下载）→ 读 `commands/build.md` |
 | `/kzl 编译下载` | 编译+下载 → 读 `commands/build.md` |
 | `/kzl 打印 <要求>` | 按 CHESHI 规范添加调试打印 → 读 `commands/print.md` |
+| `/kzl 报告 [标题/要求]` | 根据当前对话生成详细报告并保存记忆 → 读 `commands/report.md` |
 | `/kzl 新增流程` | 新增步骤/阶段 → 读 `commands/add-flow.md` |
 
 > **命令与流程严格分离**：识别到上表命令后，直接读取对应 `commands/*.md` 执行并停止，
 > 不得先运行 `workflow_engine.py`，不得初始化或推进流程。命令可为流程准备配置、打印和固件，
 > 但不受 `flow.yaml` 当前 `seq` 约束。`/klz 打印` 作为 `/kzl 打印` 的兼容拼写处理。
+> 所有 `report` 动作必须使用完整报告模板，明确证据与验证边界，并同时更新
+> `data/debug-history.yaml` 和 `/memories/embedded-debug-workflow.md` 持久记忆；任何一项失败均不得宣称报告完成。
 
 ---
 

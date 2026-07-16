@@ -88,8 +88,10 @@
 ## 7. 报告与记忆
 
 - [ ] **报告生成**：`{项目目录}/.copilot/报告/{日期}_{简述}.md` 含
-      故障描述 / 根因分析 / 修复摘要 / 变更文件 / 验证日志 五要素
-- [ ] **记忆写入**：索引追加到 `data/debug-history.yaml`（date/desc/fault/root_cause/report）
+      对话背景 / 环境配置 / 复现步骤 / 排查时间线 / 证据链 / 根因分析 / 修复原理 /
+      变更文件 / 验证结果与边界 / 回归风险 / 后续建议，并明确所有未验证事项
+- [ ] **索引写入**：追加到 `data/debug-history.yaml`（date/desc/fault/root_cause/status/verification/report/source）
+- [ ] **持久记忆**：摘要和报告路径写入 `/memories/embedded-debug-workflow.md`，且无重复条目
 - [ ] **状态收尾**：`flow-gate.json` 的 `currentPhase` 已标记 `COMPLETED`
 
 ---

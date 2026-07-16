@@ -15,7 +15,7 @@
 #   ask_user        向用户提问采集参数（AI 执行）
 #   edit_source     编辑源码：insert_cheshi / remove_cheshi / fix_bug（AI 执行）
 #   analyze         分析日志/定位根因（AI 执行）
-#   report          生成标准化报告 + 写记忆（AI 执行）
+#   report          生成详细报告 + 写项目索引和持久记忆（AI 执行）
 #   check_regression 全量回归核对清单（AI 执行）
 #   update_state    更新流程状态（一般写在 on_success/on_failure 的 do 列表里）
 #   log             输出日志
@@ -596,17 +596,30 @@ steps:
   - seq: 20
     id: step_report
     phase: VERIFY_AND_REPORT
-    what: "生成标准化报告 .md + 写记忆索引"
+    what: "生成包含完整证据链的详细报告，并写入项目索引和持久记忆"
     action: report
     params:
       report_template: "templates/report.md"
       report_path: "{project_dir}/.copilot/报告/{date}_{short_desc}.md"
+      requirements: |
+        必须填写模板全部 11 节，并以当前对话为主线，结合源码、Git 差异、流程状态、
+        编译/下载输出和串口日志形成可追溯证据链。记录失败尝试、排除过程、修复原理、
+        修改符号、验证命令与实际结果、回归风险和未验证事项。未知内容明确写“未提供”或
+        “未验证”，禁止猜测或伪造证据；不得将编译成功等同于故障已解决。
       report_fields:
+        - conversation_context
+        - environment_and_config
         - fault_description
+        - reproduction_steps
+        - investigation_timeline
         - root_cause
+        - evidence_chain
         - fix_summary
         - files_changed
         - verification_logs
+        - verification_limits
+        - regression_risks
+        - follow_up_actions
       memory_entry:
         path: "data/debug-history.yaml"
         format: |
@@ -614,7 +627,25 @@ steps:
             desc: "{short_desc}"
             fault: "{fault_description}"
             root_cause: "{root_cause}"
+            status: "{resolution_status}"
+            verification: "{verification_summary}"
             report: "{report_path}"
+            source: "workflow"
+      persistent_memory:
+        path: "/memories/embedded-debug-workflow.md"
+        operation: "append_or_update"
+        fields:
+          - date
+          - project_name
+          - fault_description
+          - root_cause
+          - fix_summary
+          - verification_summary
+          - resolution_status
+          - report_path
+        rules: |
+          写入前先查看 /memories/，优先更新已有文件；只保存可复用摘要和报告绝对路径，
+          不复制整篇报告，不保存凭据或大段日志。同一 report_path 不得重复写入。
     precheck: []
     pre_action: []
     on_success:
