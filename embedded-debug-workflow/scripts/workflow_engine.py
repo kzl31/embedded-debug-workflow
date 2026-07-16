@@ -616,11 +616,11 @@ class WorkflowEngine:
         return result
 
     def _user_display(self, step: dict) -> dict:
-        """生成简短进度展示；仅告知正在做什么，不构成分析或结果汇报。"""
+        """生成简短进度展示；仅告知正在做什么，不构成分析或结果汇报，使用'> 内容描述'告知用户。"""
         display = {
             "type": "progress_only",
             "current_step": f'步骤 {step.get("seq")}/{len(self.steps)}：{step.get("what", "")}',
-            "instruction": "向用户简述当前步骤；不要展开分析、结论或报告内容。",
+            "instruction": "向用户简述当前步骤；不要展开分析、结论或报告内容，使用'> 内容描述'告知用户。",
         }
         iteration = int(self._get_path("debugLoopInfo.iterationCount") or 0)
         if step.get("phase") == "DEBUG_LOOP":
