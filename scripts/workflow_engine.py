@@ -192,6 +192,12 @@ def _default_flow_gate() -> dict:
         "currentPhase": None,
         "completedPhases": [],
         "lastUpdated": None,
+        "pauseState": {
+            "waiting": False,
+            "reason": "",
+            "seq": None,
+            "since": None
+        },
         "projectInfo": {
             "configFound": False,
             "initialQuestionsAnswered": False,
@@ -264,8 +270,9 @@ class WorkflowEngine:
         # 单步驱动的中间状态
         self.next_seq: Optional[int] = None
         self.finished: bool = False
-        self.waiting: bool = False
-        self.wait_msg: str = ""
+        pause_state = self.fg.get("pauseState", {})
+        self.waiting: bool = bool(pause_state.get("waiting", False))
+        self.wait_msg: str = str(pause_state.get("reason", "") or "")
 
         self.engine_bin = f'python "{Path(__file__).resolve()}"'
 
@@ -308,6 +315,8 @@ class WorkflowEngine:
 
     def run(self) -> dict:
         """执行当前步骤（--mode 1）。自动步骤执行并链式推进，AI 步骤输出指令。"""
+        if self.waiting:
+            return self._waiting()
         step = self._current_step()
         if step is None:
             return self._completed()
@@ -318,6 +327,10 @@ class WorkflowEngine:
 
     def ack(self, ok: bool) -> dict:
         """AI 步骤提交结果（--ack success|failure / --done）。"""
+        if self.waiting:
+            return self._result(
+                "error", "流程处于人工暂停状态，请先使用 --wake 恢复",
+                next_action=f'{self.engine_bin} --project "{self.project_dir}" --wake')
         step = self._current_step()
         if step is None:
             return self._completed()
@@ -329,8 +342,17 @@ class WorkflowEngine:
 
     def wake(self) -> dict:
         """从 wait_user 暂停恢复，重新执行当前步骤（--wake）。"""
+        if not self.waiting:
+            return self._result("error", "当前流程未处于人工暂停状态，无需 --wake")
         self.waiting = False
         self.wait_msg = ""
+        self.fg["pauseState"] = {
+            "waiting": False,
+            "reason": "",
+            "seq": None,
+            "since": None,
+        }
+        save_flow_gate(self.project_dir, self.fg)
         step = self._current_step()
         if step is None:
             return self._completed()
@@ -341,6 +363,17 @@ class WorkflowEngine:
 
     def show_status(self) -> dict:
         """只读快照（--mode 0）。"""
+        if self.waiting:
+            result = self._waiting()
+            result["state"] = {
+                "currentPhase": self.currentPhase,
+                "completedPhases": self.fg.get("completedPhases", []),
+                "pauseState": self.fg.get("pauseState", {}),
+                "projectInfo": self.fg.get("projectInfo", {}),
+                "debugLoopInfo": self.fg.get("debugLoopInfo", {}),
+                "verifyReport": self.fg.get("verifyReport", {}),
+            }
+            return result
         step = self._current_step()
         total = len(self.steps)
         result = {
@@ -368,6 +401,7 @@ class WorkflowEngine:
         result["state"] = {
             "currentPhase": self.currentPhase,
             "completedPhases": self.fg.get("completedPhases", []),
+            "pauseState": self.fg.get("pauseState", {}),
             "projectInfo": self.fg.get("projectInfo", {}),
             "debugLoopInfo": self.fg.get("debugLoopInfo", {}),
             "verifyReport": self.fg.get("verifyReport", {}),
@@ -536,8 +570,7 @@ class WorkflowEngine:
         elif val == "done":
             self.finished = True
         elif val == "wait":
-            self.waiting = True
-            self.next_seq = self.currentSeq
+            self._do_wait("等待用户处理")
         elif isinstance(val, int):
             self.next_seq = val
         elif isinstance(val, str):
@@ -554,6 +587,13 @@ class WorkflowEngine:
         self.waiting = True
         self.wait_msg = msg or ""
         self.next_seq = self.currentSeq
+        self.fg["pauseState"] = {
+            "waiting": True,
+            "reason": self.wait_msg,
+            "seq": self.currentSeq,
+            "since": now_iso(),
+        }
+        save_flow_gate(self.project_dir, self.fg)
 
     def _do_log(self, aval: Any) -> None:
         if isinstance(aval, dict):
