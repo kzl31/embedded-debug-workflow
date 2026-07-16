@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 # 引入 config_reader
@@ -74,7 +75,12 @@ def build_project(
     rebuild: bool = False,
     log_file: str | None = None,
 ) -> dict:
-    """执行 Keil 编译，返回结果字典。"""
+    """执行 Keil 编译，返回结果字典。
+
+    UV4 的 ``-o`` 参数会在编译过程中写入日志文件。直接等待编译进程
+    结束，不设置总编译时限；若日志连续 60 秒没有新增内容，则认为
+    编译卡死/失败并终止 UV4。
+    """
     proj_dir = Path(project_dir)
     if not proj_dir.exists():
         return {
@@ -86,6 +92,9 @@ def build_project(
 
     # 构建命令
     log_path = log_file or str(_logs_dir(proj_dir) / "build_log.txt")
+    Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+    # 每次编译使用空日志，避免上一次残留内容被误判为本次实时输出。
+    Path(log_path).write_text("", encoding="utf-8")
     if rebuild:
         cmd = f'"{uv4_path}" -r "{project_file}" -o "{log_path}"'
     else:
@@ -96,14 +105,59 @@ def build_project(
     print(f"[keil_build] 🔨 编译: {project_file}")
     print(f"[keil_build]   命令: {cmd}")
 
+    # 日志无输出看门狗：用于识别 UV4 启动后卡死、等待不可见对话框等情况。
+    idle_timeout = 60.0
+    start_time = time.monotonic()
+    last_output_time = start_time
+    previous_log_state: tuple[int, int] | None = None
+    timed_out = False
+
     try:
-        result = subprocess.run(
-            cmd, cwd=project_dir, shell=True, capture_output=True, text=True, timeout=120
+        # 不捕获 stdout/stderr，避免子进程输出管道满后阻塞；编译详情以 -o 日志为准。
+        process = subprocess.Popen(
+            cmd,
+            cwd=project_dir,
+            shell=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
-    except subprocess.TimeoutExpired:
+        while process.poll() is None:
+            now = time.monotonic()
+            try:
+                stat = Path(log_path).stat()
+                log_state = (stat.st_size, stat.st_mtime_ns)
+            except FileNotFoundError:
+                log_state = None
+
+            if log_state != previous_log_state:
+                previous_log_state = log_state
+                last_output_time = now
+                if log_state:
+                    print(
+                        f"[keil_build]   编译日志已更新: {log_state[0]} bytes",
+                        flush=True,
+                    )
+
+            if now - last_output_time >= idle_timeout:
+                timed_out = True
+                print(
+                    f"[keil_build] ❌ 编译连续 {int(idle_timeout)} 秒无日志输出，判定失败",
+                    flush=True,
+                )
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+                break
+            time.sleep(0.5)
+
+        return_code = process.returncode
+    except OSError as exc:
         return {
             "status": "failure",
-            "summary": "编译超时（>120s）",
+            "summary": f"无法启动编译进程: {exc}",
             "errors": 1,
             "warnings": 0,
         }
@@ -133,8 +187,8 @@ def build_project(
             summary_line = line.strip()
             break
 
-    # 判断状态
-    status = "success" if errors == 0 else "failure"
+    # 必须同时满足：进程正常退出、没有错误、没有被无输出看门狗终止。
+    status = "success" if return_code == 0 and errors == 0 and not timed_out else "failure"
 
     result_dict = {
         "status": status,
@@ -144,11 +198,16 @@ def build_project(
         "errors": errors,
         "warnings": warnings,
         "build_cmd": cmd,
-        "return_code": result.returncode,
+        "return_code": return_code,
     }
 
     if errors > 0:
         result_dict["error_lines"] = error_lines[:20]  # 最多前20条错误
+
+    if timed_out and not summary_line:
+        result_dict["summary"] = "编译失败：日志连续60秒无新增输出"
+    elif return_code != 0 and not summary_line:
+        result_dict["summary"] = f"编译进程异常退出，返回码: {return_code}"
 
     # 提取固件大小
     size_pattern = re.compile(r"Program Size:\s*Code=\s*(\d+)\s+RO-data=\s*(\d+)\s+RW-data=\s*(\d+)\s+ZI-data=\s*(\d+)")
