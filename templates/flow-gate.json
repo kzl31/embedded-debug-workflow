@@ -9,6 +9,9 @@
     "seq": null,
     "since": null
   },
+  "progressDisplay": {
+    "acknowledgedSeq": null
+  },
   "projectInfo": {
     "configFound": false,
     "initialQuestionsAnswered": false,

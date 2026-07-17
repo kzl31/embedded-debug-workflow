@@ -40,7 +40,8 @@
 `ai_progress_display` 控制 AI 是否向用户展示流程进度：
 
 - `true`（默认）：每个实际到达的流程步骤至少展示一次，引擎提供可直接输出的
-  `user_display.text`，AI 只能原样展示，不能扩写分析或结论。
+  `user_display.text` 并返回 `status=awaiting_progress`。该 JSON 只是待展示指令，不等于用户已看到；
+  AI 必须先独立输出该文本，再执行 `--ack-progress` 解锁步骤，之后才能执行步骤操作。
 - `false`：引擎不返回 `user_display`，AI 不输出流程进度；正常提问、人工暂停和最终结果不受影响。
 - 该字段必须是 JSON 布尔值 `true` / `false`，不能写成字符串。
 
