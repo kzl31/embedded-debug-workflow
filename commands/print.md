@@ -36,6 +36,7 @@ required_reference: "{skill_dir}/refs/cheshi-macro.md"
 ```yaml
 action: design
 强制规则:
+  - 不是每次都必须加打印；只有在 AI 判断当前阶段、故障类型和可观测性确实值得引入新证据时才插入
   - 凡调试结束需要删除的新增代码都由 CHESHI 条件编译完整包裹，不得只包裹 printf
   - 包括临时头文件引用、子宏、类型/声明、变量、函数参数、辅助函数、初始化、采集器、缓冲区、Flush、调用点和错误路径
   - CHESHI 统一集中定义在 main.c 文件头部；已有定义时复用并按需调整位掩码

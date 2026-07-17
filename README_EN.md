@@ -15,7 +15,24 @@ Issue discovery → Fault classification → CHESHI instrumentation iterations �
 → Serial log analysis → Business code fix → Regression verification → Standardized report
 ```
 
-The workflow definition is centralized in the single file **`flow.yaml`** (a linearly numbered step table). Runtime parameters and workspace paths are centralized in `scripts/skill-config.json`; Python scripts access them through `scripts/path_config.py`.
+The workflow definition is centralized in the single file **`flow.yaml`** (a linearly numbered step table). The engine logic lives in the `scripts/engine/` package (table lookup + sequence jump resolver, zero hardcoded steps); `scripts/workflow_engine.py` is only a CLI entry that forwards to this package. Runtime parameters and workspace paths are centralized in `scripts/skill-config.json`; Python scripts access them through `scripts/path_config.py`.
+
+The engine is split by single responsibility into the following modules; all files are available under `scripts/engine/`:
+
+| Module file | Responsibility |
+|:---|:---|
+| `engine/__init__.py` | Package exports, exposing `WorkflowEngine` and `main` |
+| `engine/constants.py` | Engine constants and paths (Skill dir resolution, `flow.yaml` path, action type classification AUTO/AI/TERMINATE, state encryption key) |
+| `engine/utils.py` | Pure utility functions: JSON/YAML loading, template path substitution, time/value parsing, XOR+base64 lightweight encryption/decryption, config fingerprint |
+| `engine/state.py` | Workflow state `flow-gate.json` read/write and default structure: path resolution, progress toggle, encrypted read / atomic write / concurrency protection |
+| `engine/conditions.py` | Condition evaluation and state writes: dotted-path reads, AI param placeholder expansion, condition expression comparison, state field write/increment |
+| `engine/executors.py` | Concrete executors: locate script absolute path, run external Python scripts and collect per-project results, check file existence |
+| `engine/auto_steps.py` | Auto-step driving and flow control: chained advancement, single-step execution (assert → action → branch), action dispatch, goto/exit/wait/log primitives |
+| `engine/ai_instructions.py` | AI step instructions and terminal states: generate AI work instructions, minimal progress payload, waiting/completed output |
+| `engine/config_sync.py` | Config and project-mode sync: respond to `--set`, reload and validate config, generate run state per project mode, derive execution capabilities |
+| `engine/core.py` | Engine core: load `flow.yaml`/`flow-gate`, basic queries, sequence advancement, public entry `run/ack/wake/show_status/reset/init`, unified result construction |
+| `engine/workflow.py` | `WorkflowEngine` composition class: multiple-inheritance aggregation of each Mixin, identical interface/behavior to the original single-file engine |
+| `engine/cli.py` | CLI entry `argparse`/`main`: `--init/--mode/--ack/--wake/--reset/--set/--reload-config`, identical behavior to the original engine |
 
 ## 🎯 Use Cases
 
@@ -92,7 +109,20 @@ embedded-debug-workflow/
 │   ├── multi_project_runner.py # Per-project build/flash/serial by mode
 │   ├── path_config.py     #   Centralized path and runtime-parameter interface
 │   ├── skill-config.json  #   Single source for paths, defaults, and timeouts
-│   └── workflow_engine.py #   🔑 Workflow engine (table lookup + sequence jump, zero hardcoded steps)
+│   ├── engine/            #   🔑 Modular workflow engine (table lookup + sequence jump, zero hardcoded steps)
+│   │   ├── __init__.py    #   Package exports (WorkflowEngine, main)
+│   │   ├── constants.py   #   Engine constants & paths, action types, encryption key
+│   │   ├── utils.py       #   Pure utilities (IO / crypto / parse / fingerprint)
+│   │   ├── state.py       #   flow-gate state read/write & default structure
+│   │   ├── conditions.py  #   Condition evaluation & state writes
+│   │   ├── executors.py   #   External script & file-check executors
+│   │   ├── auto_steps.py  #   Auto-step driving & flow control
+│   │   ├── ai_instructions.py # AI step instructions & terminal states
+│   │   ├── config_sync.py #   Config & project-mode sync
+│   │   ├── core.py        #   Init / query / main entry / result builder
+│   │   ├── workflow.py    #   WorkflowEngine composition class (Mixins)
+│   │   └── cli.py         #   argparse entry main()
+│   └── workflow_engine.py #   Engine CLI entry (delegates to engine/ package)
 ├── refs/                  # Detailed specs loaded by AI on demand
 │   ├── core-rules.md      #   Mandatory rules (AI behavior constraints)
 │   ├── script-commands.md #   Script command reference
@@ -181,10 +211,10 @@ python scripts/workflow_engine.py --project "<workspace>" --ack failure
 
 ```text
 1. STARTUP auto-ensures the workspace Keil configuration exists
-2. AI confirms whether to use the current or newly modified config, then asks per-project modes from the final configProjects (seq 2~3)
-3. AI quickly reviews source/history, then asks structured fault questions and a separate final supplement question (seq 4~5)
-4. AI injects the CHESHI debug macro, auto build+flash and captures logs (seq 7~11)
-5. AI analyzes logs and iteratively locates the root cause (seq 12, return to seq 8 if needed)
+2. AI confirms whether to use the current or newly modified config, then asks per-project modes from the final configProjects (seq 1)
+3. AI quickly reviews source/history, then asks structured fault questions and a separate final supplement question (seq 2~3)
+4. AI injects the CHESHI debug macro only when it is worthwhile and can produce new evidence; otherwise it fixes build/connection/config issues first (seq 6~11)
+5. AI analyzes logs and iteratively locates the root cause (seq 10, return to seq 6 if needed)
 6. After locating the root cause, fix the business code first while keeping CHESHI observation points
 7. Rebuild, flash, and continuously read serial logs to confirm the fault is fully resolved; on failure return to the debug loop
 8. After confirmation, clean up CHESHI, then build, run regression verification, and output the report
@@ -192,7 +222,7 @@ python scripts/workflow_engine.py --project "<workspace>" --ack failure
 
 ## 📝 Key Conventions
 
-- **CHESHI macro**: bitmask or numeric levels; all debug content must be wrapped by CHESHI. Communication layers only capture snapshots; the `main` loop outputs uniformly; delete the whole block when debugging ends.
+- **CHESHI macro**: bitmask or numeric levels; debug logging is not mandatory every round. It should be added only when AI judges it can provide new evidence for the current fault stage. All debug content must be wrapped by CHESHI. Communication layers only capture snapshots; the `main` loop outputs uniformly; delete the whole block when debugging ends.
 - **Git control**: local operations only, `git push` is forbidden; debug branch naming `debug/<fault-brief>_YYYYMMDD`.
 - **8-iteration limit**: after 8 rounds of auto-instrumentation still unable to locate the fault → trigger human assistance (`wait_user`).
 - **Three types of pause**: device power-cycle restart / Keil breakpoint debugging / iteration-limit assistance.

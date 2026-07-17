@@ -44,7 +44,7 @@ meta:
   version: 2
   description: "嵌入式固件调试自动化工作流（单文件线性序号驱动）"
   max_iterations: 8          # 调试循环迭代上限（集中配置）
-  max_retry: 2               # 下载/监听连续重试上限（集中配置）
+  max_retry: 2               # 编译/下载/监听连续重试上限（集中配置，当前为 2；编译与下载统一引用）
   max_ask: 3                 # 调试循环中动态追问轮数上限
   state_file: flow-gate.json
   engine: scripts/workflow_engine.py
@@ -76,12 +76,9 @@ steps:
     call: 'python scripts/config_reader.py --init "{project_dir}" --interactive'
     params:
       behavior: |
-        Python 脚本独立完成全部初始化参数配置：
-          1. 扫描/合并 Keil 工程并保留已有人工配置；
-          2. 数字选择 1=按当前配置进行、2=已修改配置按照最新进行；
-          3. 对每个项目数字选择 1=none、2=compile_only、3=compile_flash、4=full；
-          4. 将 project_modes 保存到配置文件，引擎 read_config 自动同步全部运行状态。
-        AI 不再使用提问工具确认配置或逐项目模式。
+        Python 独立完成初始化：扫描/合并 Keil 工程、选择配置与逐项目模式
+        （none/compile_only/compile_flash/full）、保存 project_modes，read_config 自动同步状态。
+        AI 不再用提问工具确认配置或项目模式。
     precheck: []
     pre_action: []
     on_success:
@@ -101,11 +98,10 @@ steps:
     action: analyze
     params:
       template: |
-        1. 根据 seq 1 Python 交互初始化最终确认的项目配置、执行模式和用户开场描述，快速浏览相关源码入口、任务/中断、
-          通信接口、关键状态变量、最近可能涉及的变更点以及已有日志输出路径。
-        2. 读取 data/debug-history.yaml，检查相似历史案例。
-        3. 形成简短审查记录：涉及文件/模块、调用或数据流入口、可疑变更点、需要验证的假设、
-          建议获取的证据。这里只做快速审查和问题建模，不裁决根因，不编译，不下载，不修改源码。
+        1. 快速浏览相关源码入口、任务/中断、通信接口、关键状态变量、近期变更点及日志输出路径。
+        2. 读取 data/debug-history.yaml 检查相似历史案例。
+        3. 形成简短审查记录（涉及文件/模块、数据流入口、可疑变更点、待验证假设、建议证据）。
+          仅做审查与建模，不裁决根因、不编译、不下载、不改源码。
     precheck: []
     pre_action: []
     on_success:
@@ -124,29 +120,17 @@ steps:
     action: ask_user
     params:
       template: |
-        必须使用 agent工具询问问题
-        A。询问以下 4 个结构化问题。每个问题均允许自由补充，
-        不得退化为纯自由文本；除复现情况外均可多选：
+        必须使用 agent 工具询问。
+        A. 4 个结构化问题（允许自由补充，不得退化为纯自由文本；除复现情况外均可多选）：
         1. 复现情况：【必现 / 偶现 / 首次出现】。
-        2. 影响项目：从 projectInfo.configProjects 动态生成项目名选项，允许多选；禁止使用旧配置、
-          固定项目名或自行猜测。
-        3. 异常类型：【通信 / 数据 / 时序 / 启动 / 硬件 / 其他】，允许多选。
-        4. 已有证据：【串口日志 / 抓包 / 寄存器变量 / 无】，允许多选。
-
-        B. 动态故障追问
-        1. 以用户开场描述、A 部分、审查结果和历史记忆为依据动态生成问题，最多进行 3 轮。
-        2. 每轮最多 4 个问题；只询问当前仍缺失或互相矛盾的信息，禁止机械重复上一轮问题。
-        3. 问题应覆盖需要确认的内容：现象细节、复现条件、相关模块/接口、变更点、可提供的日志，
-          以及审查后发现但用户可能尚未想到的关键信息。每轮问题必须结合当前已知内容具体化。
-        4. 用户回答后重新判断信息是否足够；信息不足才进入下一轮，信息足够可以提前结束追问。
-        5. 追问结束时，必须额外单独询问一个问题：请问还有什么补充？ 【无】和自由回答
-          该问题不计入上述任一轮的问题数，但必须等待用户回答。
-        
-        可结合 seq 2 审查结果在各问题说明中补充具体上下文，但不得改变上述选项类别。
-        完成两次询问并收到全部回答后执行 --ack success；信息矛盾且无法继续时执行 --ack failure。
-      note: |
-        本步不得重复询问配置和项目模式。影响项目选项必须来自最新 configProjects。
-        最终“请问还有什么补充？”必须独立询问并等待回答。
+        2. 影响项目：从 projectInfo.configProjects 动态生成选项（多选）；禁止用旧配置、固定项目名或自行猜测。
+        3. 异常类型：【通信 / 数据 / 时序 / 启动 / 硬件 / 其他】。
+        4. 已有证据：【串口日志 / 抓包 / 寄存器变量 / 无】。
+        B. 动态追问：依据开场描述、A 部分、seq 2 审查与历史记忆生成，最多 3 轮、每轮最多 4 问；
+          只问缺失或矛盾信息，禁止机械重复；信息足够可提前结束，不得改变 A 的选项类别。
+        C. 追问结束须额外单独询问“请问还有什么补充？”（【无】+自由回答），不计入轮数且必须等待回答。
+        全部回答后 --ack success；信息矛盾无法继续时 --ack failure。
+      note: "不得重复询问配置与项目模式；影响项目选项须来自最新 configProjects；“请问还有什么补充？”必须独立询问并等待回答。"
     precheck: []
     pre_action: []
     on_success:
@@ -196,11 +180,10 @@ steps:
       output:
         field: debugLoopInfo.suspiciousLocation
         format: "<文件:行号> — <怀疑原因>"
-    note: |
-      本步只负责"定位可疑位置"并写入 debugLoopInfo.suspiciousLocation，
-      绝不是"已找到根因"的终点。
-      即便你已强烈怀疑根因（如某函数被删除），也严禁在此向用户汇报结论或询问。
-      定位完成后 --ack success 推进。
+      note: |
+        本步只负责定位可疑位置并写入 debugLoopInfo.suspiciousLocation，并非“已找到根因”。
+        即便强烈怀疑根因（如某函数被删除），也严禁在此汇报结论或询问。
+        定位完成后 --ack success 推进。
     precheck: []
     pre_action: []
     on_success:
@@ -225,7 +208,7 @@ steps:
   - seq: 6
     id: step_add_cheshi
     phase: DEBUG_LOOP
-    what: "仅对 mode=full 的项目在可疑位置补充充分的 CHESHI 调试观测；允许为采集信息适当修改代码，严禁停下"
+    what: "仅当有必要且能产出新证据时，对 mode=full 项目在可疑位置补充 CHESHI 观测；遇编译失败/语法错误/配置问题等优先修复而非盲目加日志"
     action: edit_source
     params:
       edit_action: insert_cheshi
@@ -246,23 +229,18 @@ steps:
             debugLoopInfo.iterationCodeChanged=false
             debugLoopInfo.iterationExecutionAllowed=false
         禁止在未核对真实差异时设置 modified，禁止用注释、空白、重复观测或状态字段更新冒充源码修改。
-    note: |
-      CHESHI 打印需下载到目标板运行才能看到日志，未下载时插入无意义。
-      （edit_source 属 AI 步骤，引擎不执行本步 precheck）
-      到达本步时：无论此刻是否已猜到根因，都必须补充足够的观测点做实证，也严禁在此停下向用户汇报或询问故障结论。
-      本步不是只加一条入口日志；至少覆盖：函数入口/出口、关键分支或状态跳转、
-      输入与输出长度、错误码/超时/重试计数、关键缓冲区索引或计数器、以及必要的原始帧摘要。
-      若现有代码无法暴露这些信息，允许增加临时变量、事件快照、计数器、环形缓冲区写入或
-      返回值记录，但不得改变业务协议、阻塞通信路径或在 ISR/通信底层直接 printf。
-      通信层只能采集事件/数据快照；由 main 主循环统一刷新调试输出。
-      凡本轮调试结束需要删除的新增代码都必须由 CHESHI 条件编译完整包裹，不得只包裹输出。
-      包括临时头文件引用、子宏、常量、类型/声明、全局/静态/局部变量、函数参数、辅助函数、
-      初始化/反初始化、环形缓冲区、采集与 Flush 调用、错误路径、计数器和临时业务分支；
-      禁止裸 printf、puts、日志宏、临时依赖或未受控的调试副作用。正式代码不得依赖临时符号，
-      关闭 CHESHI 后必须可独立编译且无行为变化。
-      只有实际代码差异与上述状态一致后才 --ack success。若没有修改，也必须如实设置 reused/unchanged；
-      引擎将跳过编译、下载和串口监听，不得把“没有修改”包装成新的加打印轮次。
-      注：若因 seq 7 编译失败回到本步，此时应修复编译错误（而非纠结插打印）。
+      note: |
+        修改前先 git commit 以便回退。
+        插入 CHESHI 非每轮强制，仅当能缩小范围、验证假设或确认根因时才补充；CHESHI 须下载到板才可见。
+        编译失败/语法错误/配置错误/目标板不可用时优先修复问题而非加日志（含从 seq 7 回本步的情况）。
+        （edit_source 属 AI 步骤，引擎不执行本步 precheck）
+        严禁在此停下汇报或询问故障结论。观测须至少覆盖：函数入口/出口、关键分支或状态跳转、
+        输入输出长度、错误码/超时/重试计数、缓冲区索引或计数器、必要的原始帧摘要。
+        不得改变业务协议、阻塞通信路径或在 ISR/通信底层直接 printf；通信层只采集快照，由 main 主循环统一输出。
+        新增代码须由 CHESHI 条件编译完整包裹（头文件/子宏/常量/类型/变量/函数参数/辅助函数/初始化/
+        缓冲区/采集与 Flush/错误路径/计数器/临时分支），禁止裸 printf/puts/日志宏/未受控副作用；
+        关闭 CHESHI 后正式代码须可独立编译且行为不变。
+        无修改须如实设 reused/unchanged，引擎将跳过编译/下载/监听；差异一致后才 --ack success。
     precheck: []
     pre_action: []
     on_success:
@@ -321,14 +299,14 @@ steps:
                       - goto: 8
                     else:
                       - goto: 19
-      - assert: "debugLoopInfo.compileRetryCount < 5"
+      - assert: "debugLoopInfo.compileRetryCount < {meta.max_retry}"
         on_fail:
           - log:
               level: error
-              msg: "编译失败已达到5次，流程暂停；调整后将重新编译"
+              msg: "编译失败已达到2次，流程暂停；调整后将重新编译"
           - update_state:
               debugLoopInfo.compileRetryCount: 0
-          - wait_user: "连续5次编译失败。请调整源码或编译环境，确认后恢复流程，流程将从本编译步骤重试。"
+          - wait_user: "连续2次编译失败。请调整源码或编译环境，确认后恢复流程，流程将从本编译步骤重试。"
     pre_action:
       - update_state:
           debugLoopInfo.compileRetryCount: "+1"
@@ -349,14 +327,14 @@ steps:
         then:
           - goto: 17
         else:
-          - when: "debugLoopInfo.compileRetryCount >= 5"
+          - when: "debugLoopInfo.compileRetryCount >= {meta.max_retry}"
             then:
               - log:
                   level: error
-                  msg: "连续5次编译失败，流程暂停；调整后将重新编译"
+                  msg: "连续2次编译失败，流程暂停；调整后将重新编译"
               - update_state:
                   debugLoopInfo.compileRetryCount: 0
-              - wait_user: "连续5次编译失败。请调整源码或编译环境，确认后恢复流程，流程将从本编译步骤重试。"
+              - wait_user: "连续2次编译失败。请调整源码或编译环境，确认后恢复流程，流程将从本编译步骤重试。"
             else:
               - log:
                   level: warning
@@ -376,7 +354,7 @@ steps:
       - assert: 'projectInfo.hasFlashProjects == true'
         on_fail:
           - goto: 19
-      - assert: "debugLoopInfo.retryCount < 2"
+      - assert: "debugLoopInfo.retryCount < {meta.max_retry}"
         on_fail:
           - log:
               level: error
@@ -399,7 +377,7 @@ steps:
     on_failure:
       - update_state:
           debugLoopInfo.lastFlashStatus: "failure"
-      - when: "debugLoopInfo.retryCount >= 2"
+      - when: "debugLoopInfo.retryCount >= {meta.max_retry}"
         then:
           - log:
               level: error
@@ -452,13 +430,13 @@ steps:
       hint: |
         判断日志是否足以定位根因：
           - 找到根因 → --ack success 推进。
-          - 有方向但未定位，且已设计下一轮不同的有效观测 → 先设置
+          - 有方向未定位且已设计下一轮不同有效观测 → 先设
             debugLoopInfo.nextObservationPlanned=true、nextObservationSummary=<具体文件/变量/分支>，
-            再 --ack failure；引擎才允许 iterationCount+1 回到加打印。
-          - 没有新增观测方案，或本轮既无源码修改又无新证据 → 不得继续空转；
-            保持 nextObservationPlanned=false 后 --ack failure，引擎立即 wait_user，且不增加轮次。
-          - 没有信心、需要向用户追问 → 先 --set debugLoopInfo.askUser=true 再 --ack failure
-            （引擎会进入追问环节，最多追问 meta.max_ask 次，超过转人工求助）
+            再 --ack failure，引擎才允许 iterationCount+1 回加打印。
+          - 无新增观测方案，或本轮既无源码修改又无新证据 → 不得空转；
+            保持 nextObservationPlanned=false 后 --ack failure，引擎立即 wait_user 且不增轮次。
+          - 没信心需追问 → 先 --set debugLoopInfo.askUser=true 再 --ack failure
+            （引擎进入追问环节，最多 meta.max_ask 次，超转人工）。
     precheck: []
     pre_action: []
     on_success:
@@ -522,9 +500,7 @@ steps:
           3️⃣ 相关模块 / 接口 / 信号的正常预期行为是什么？
           4️⃣ 是否与其他已知问题相关？
           5️⃣ 有无可提供的额外日志 / 抓包 / 寄存器值 / 变量取值？
-      note: |
-        本步骤仅在 AI 没信心时由 step_analyze_result 跳转进入。
-        用户回答后 --ack success 推进。
+      note: "仅在 AI 没信心时由 step_analyze_result 进入；用户回答后 --ack success 推进。"
     precheck: []
     pre_action: []
     on_success:
@@ -543,15 +519,11 @@ steps:
     params:
       edit_action: fix_bug
       note: |
-        修改前先 git commit 当前状态，以便回退。
-        修复不能只凭代码阅读判断完成：必须同时设计与根因直接对应的验证条件，
-        并在修复代码附近增加临时检测观测，例如修复前后关键变量/长度/索引/状态/错误码、
-        计数器、超时与重试结果，或不变量断言失败记录。
-        检测必须能区分“原故障已消失”和“只是本轮没有复现”，并覆盖回归风险。
-        这些检测代码与打印同样必须全部使用 CHESHI 包裹；通信层只记录快照/事件，
-        不得直接 printf 或阻塞通信，最终由 main 主循环统一输出。
-        若修复需要调整时序，必须先记录原时序基线，再验证关键间隔、超时和队列行为未被破坏。
-        seq 13~16 必须基于这些观测结果判断，不能仅以编译、下载成功作为修复成功依据。
+        修复须同时设计与根因对应的验证条件，并在修复处增加临时检测观测
+        （关键变量/长度/索引/状态/错误码、计数器、超时与重试结果或不变量断言），能区分“故障已消失”与“仅未复现”并覆盖回归风险。
+        检测代码须用 CHESHI 包裹；通信层只记录快照，不得直接 printf 或阻塞通信，由 main 统一输出。
+        若调整时序，须先记录原基线再验证间隔/超时/队列未被破坏。
+        seq 13~16 须基于观测结果判断，不能仅以编译/下载成功作为修复依据。
     precheck: []
     pre_action: []
     on_success:
@@ -583,14 +555,14 @@ steps:
                   - goto: 14
                 else:
                   - goto: 16
-      - assert: "debugLoopInfo.compileRetryCount < 5"
+      - assert: "debugLoopInfo.compileRetryCount < {meta.max_retry}"
         on_fail:
           - log:
               level: error
-              msg: "验证编译失败已达到5次，流程暂停；调整后将重新编译"
+              msg: "验证编译失败已达到2次，流程暂停；调整后将重新编译"
           - update_state:
               debugLoopInfo.compileRetryCount: 0
-          - wait_user: "修复后的固件连续5次编译失败。请调整源码或编译环境，确认后恢复流程，流程将从本编译步骤重试。"
+          - wait_user: "修复后的固件连续2次编译失败。请调整源码或编译环境，确认后恢复流程，流程将从本编译步骤重试。"
     pre_action:
       - update_state:
           debugLoopInfo.compileRetryCount: "+1"
@@ -610,14 +582,14 @@ steps:
         then:
           - goto: 17
         else:
-          - when: "debugLoopInfo.compileRetryCount >= 5"
+          - when: "debugLoopInfo.compileRetryCount >= {meta.max_retry}"
             then:
               - log:
                   level: error
-                  msg: "验证阶段连续5次编译失败，流程暂停；调整后将重新编译"
+                  msg: "验证阶段连续2次编译失败，流程暂停；调整后将重新编译"
               - update_state:
                   debugLoopInfo.compileRetryCount: 0
-              - wait_user: "修复后的固件连续5次编译失败。请调整源码或编译环境，确认后恢复流程，流程将从本编译步骤重试。"
+              - wait_user: "修复后的固件连续2次编译失败。请调整源码或编译环境，确认后恢复流程，流程将从本编译步骤重试。"
             else:
               - goto: 5
 
@@ -674,11 +646,11 @@ steps:
       mode: verify_fix
       log_pattern: "{project_dir}/{settings.paths.copilot_dir}/{settings.paths.workspace_data_dir}/{settings.paths.logs_dir}/verify_log_p*_<项目名>.txt"
       note: |
-        mode=full 的项目必须分别读取其验证日志，确认观测窗口内修复检测条件成立、
-        原故障未复现、CHESHI 观测值符合预期且无新增错误，才能 --ack success 推进。
-        任何异常或证据不足均 --ack failure，退回 DEBUG_LOOP 重新定位和验证。
-        compile_flash 项目只能确认编译和下载；compile_only 项目只能确认编译；none 项目未执行。
-        必须根据 projectInfo.projectRuns 逐项目记录验证等级，禁止把 full 项目的板端结论扩展到其他项目。
+        mode=full 项目须分别读取验证日志，确认观测窗口内修复检测条件成立、原故障未复现、
+        CHESHI 观测值符合预期且无新增错误，才 --ack success 推进。
+        任何异常或证据不足均 --ack failure，退回 DEBUG_LOOP 重新定位与验证。
+        compile_flash 仅确认编译和下载；compile_only 仅确认编译；none 未执行。
+        须据 projectInfo.projectRuns 逐项目记录验证等级，禁止把 full 板端结论扩展到其他项目。
     precheck: []
     pre_action: []
     on_success:
@@ -695,16 +667,15 @@ steps:
   - seq: 17
     id: step_clean_cheshi
     phase: VERIFY_AND_REPORT
-    what: "流程退出前删除本次新增的全部 CHESHI 临时调试代码；无论故障已解决或迭代耗尽均须清理"
-    action: edit_source
+    what: "流程退出前删除本次新增的全部 CHESHI 临时调试代码（脚本化）；无论故障已解决或迭代耗尽均须清理"
+    action: run_script
+    call: 'python scripts/remove_cheshi.py --config-dir "{project_dir}"'
     params:
-      edit_action: remove_cheshi
       note: |
-        只删除本次调试流程新增的 CHESHI 临时代码：头文件引用、子宏、类型/声明、变量、
-        函数参数、辅助函数、初始化/反初始化、采集器、缓冲区、Flush、调用点、错误检测和
-        临时业务分支；同时恢复临时 Keil Define、Include Path、调试源文件及链接配置。
-        不得删除项目原有的 CHESHI 代码。verifyReport.fixConfirmed=false 表示故障尚未解决，
-        仍须完成临时代码清理，并在后续报告中明确记录“未解决/未定位根因”。
+        脚本先 git 提交当前状态作为回退基线（保证 AI 之后能定位出错），再扫描各工程源码移除
+        CHESHI 条件编译块与宏定义/横幅注释，并校验无残留符号。
+        Keil 工程配置(Define/Include Path/源文件)若由 AI 在插入时记录，请按记录恢复；本脚本仅清理源码块。
+        不得删除项目原有 CHESHI 代码。fixConfirmed=false 时仍须完成清理，并在报告记录“未解决/未定位根因”。
     precheck: []
     pre_action: []
     on_success:
@@ -712,7 +683,7 @@ steps:
           verifyReport.cheshiCleaned: true
       - goto: 18
     on_failure:
-      - goto: 17
+      - wait_user: "CHESHI 清理脚本返回错误（残留符号/文件见脚本输出 JSON 的 residual 字段）。请 AI 检查哪些调用未完整包裹 CHESHI 条件编译并修复，或确认无法清理；处理后再恢复流程，由 AI 判断是否重试 step 17。"
 
   - seq: 18
     id: step_clean_build
@@ -755,20 +726,19 @@ steps:
   - seq: 19
     id: step_regression
     phase: VERIFY_AND_REPORT
-    what: "确认修复未引入新问题，其他功能模块正常"
-    action: check_regression
+    what: "确认修复未引入新问题，其他功能模块正常（脚本化确定性检查 + AI 复核）"
+    action: run_script
+    call: 'python scripts/regression_check.py --config-dir "{project_dir}"'
     params:
       checklist:
         - "配置完整：config_reader.py --validate 通过（keil/projects/serial/debugger 齐全）"
-        - "串口参数与配置一致：监听端口/波特率取自对应工程的 serial"
         - "编译输出 0 Error、无阻塞性 Warning"
         - "固件下载成功：日志出现 Flash Load finished / Verify OK"
-        - "每个项目的验证日志已分别保存到工作区 Skill 专属数据目录；目录与命名以 scripts/skill-config.json 为准"
-        - "调试打印信息充分，可支撑故障定位"
-        - "业务修改仅影响目标模块，无连锁副作用（长度/偏移/缓冲区边界已复核）"
-        - "原故障现象消失，其它模块（通信/定时器/中断/外设）正常"
+        - "各项目验证日志已分别存至 Skill 专属数据目录"
         - "CHESHI 调试代码已整段清理，清理后重编 0 Error"
-        - "最终版本全量编译下载正常通过"
+        - "业务修改仅影响目标模块，无连锁副作用（长度/偏移/缓冲区边界已复核）— 需 AI 复核"
+        - "原故障现象消失，其它模块（通信/定时器/中断/外设）正常 — 需 AI 复核"
+        - "调试打印信息充分，可支撑故障定位 — 需 AI 复核"
     precheck: []
     pre_action: []
     on_success:
@@ -788,9 +758,9 @@ steps:
       report_template: "templates/report.md"
       report_path: "{project_dir}/{settings.paths.copilot_dir}/{settings.paths.workspace_data_dir}/{settings.paths.reports_dir}/{date}_{short_desc}.md"
       requirements: |
-        必须填写模板全部 11 节，并以当前对话为主线，结合源码、Git 差异、流程状态、
-        编译/下载输出和串口日志形成可追溯证据链。记录失败尝试、排除过程、修复原理、
-        修改符号、验证命令与实际结果、回归风险和未验证事项。未知内容明确写“未提供”或
+        必须填完模板全部 11 节，以当前对话为主线，结合源码、Git 差异、流程状态、
+        编译/下载输出与串口日志形成可追溯证据链。记录失败尝试、排除过程、修复原理、
+        修改符号、验证命令与实际结果、回归风险及未验证事项。未知内容写“未提供”或
         “未验证”，禁止猜测或伪造证据；不得将编译成功等同于故障已解决。
       report_fields:
         - conversation_context
@@ -830,8 +800,8 @@ steps:
           - resolution_status
           - report_path
         rules: |
-          写入前先查看 /memories/，优先更新已有文件；只保存可复用摘要和报告绝对路径，
-          不复制整篇报告，不保存凭据或大段日志。同一 report_path 不得重复写入。
+          写入前先查看 /memories/，优先更新已有文件；只保存可复用摘要与报告绝对路径，
+          不复制整篇报告，不保存凭据或大段日志；同一 report_path 不得重复写入。
     precheck: []
     pre_action: []
     on_success:
@@ -841,7 +811,9 @@ steps:
           debugSession.endTime: "{now}"
       - goto: 21
     on_failure:
-      - goto: 20
+      # 禁止无条件自跳转（与 test-terminator 同源反模式）：报告生成失败转人工暂停，
+      # 避免 AI 反复 --ack failure 时回到同一步形成空转。
+      - wait_user: "报告生成失败。请补充证据或修正报告内容后，使用 --wake 恢复流程（不会自动重试覆盖）。"
 
   - seq: 21
     id: step_complete
