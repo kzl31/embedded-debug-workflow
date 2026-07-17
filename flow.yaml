@@ -249,7 +249,14 @@ steps:
     precheck: []
     pre_action: []
     on_success:
-      - goto: step_analyze
+      - when: 'debugLoopInfo.baselineBuildPending == true'
+        then:
+          - log:
+              level: info
+              msg: "首次进入调试流程，允许在无源码修改情况下执行一次基线编译/下载/监听"
+          - goto: step_compile
+        else:
+          - goto: step_analyze
     on_failure:
       - goto: step_analyze
 
@@ -305,6 +312,22 @@ steps:
     params:
       edit_action: insert_cheshi
       macro_ref: "refs/cheshi-macro.md"
+      required_state: |
+        编辑前后必须核对实际源码差异，并据此设置：
+          - 实际新增/修改了本轮有效 CHESHI 源码：
+            debugLoopInfo.iterationChangeStatus=modified
+            debugLoopInfo.iterationCodeChanged=true
+            debugLoopInfo.iterationExecutionAllowed=true
+            debugLoopInfo.iterationChangeSummary=<文件、符号和观测点摘要>
+          - 已有观测足够，本轮未修改源码：
+            debugLoopInfo.iterationChangeStatus=reused
+            debugLoopInfo.iterationCodeChanged=false
+            debugLoopInfo.iterationExecutionAllowed=false
+          - 未产生任何有效修改且已有观测不能提供更多证据：
+            debugLoopInfo.iterationChangeStatus=unchanged
+            debugLoopInfo.iterationCodeChanged=false
+            debugLoopInfo.iterationExecutionAllowed=false
+        禁止在未核对真实差异时设置 modified，禁止用注释、空白、重复观测或状态字段更新冒充源码修改。
     note: |
       CHESHI 打印需下载到目标板运行才能看到日志，未下载时插入无意义。
       （edit_source 属 AI 步骤，引擎不执行本步 precheck）
@@ -319,14 +342,26 @@ steps:
       初始化/反初始化、环形缓冲区、采集与 Flush 调用、错误路径、计数器和临时业务分支；
       禁止裸 printf、puts、日志宏、临时依赖或未受控的调试副作用。正式代码不得依赖临时符号，
       关闭 CHESHI 后必须可独立编译且无行为变化。
-      确认插入完成即 --ack success 推进。
+      只有实际代码差异与上述状态一致后才 --ack success。若没有修改，也必须如实设置 reused/unchanged；
+      引擎将跳过编译、下载和串口监听，不得把“没有修改”包装成新的加打印轮次。
       注：若因 seq 9 编译失败回到本步，此时应修复编译错误（而非纠结插打印）。
     precheck: []
     pre_action: []
     on_success:
-      - update_state:
-          debugLoopInfo.cheshiAdded: true
-      - goto: 9
+      - when: 'debugLoopInfo.iterationCodeChanged == true'
+        then:
+          - update_state:
+              debugLoopInfo.cheshiAdded: true
+          - goto: 9
+        else:
+          - when: 'debugLoopInfo.iterationNewEvidence == true'
+            then:
+              - log:
+                  level: info
+                  msg: "本轮无源码修改但已有新证据，跳过编译下载监听，直接分析"
+              - goto: 12
+            else:
+              - wait_user: "本轮未产生新的有效源码修改，也没有新的运行证据；为防止空转，流程已暂停。请提供新排查方向，或允许设计新的 CHESHI 观测点后恢复。"
     on_failure:
       - goto: 8
 
@@ -337,6 +372,13 @@ steps:
     action: run_script
     call: 'python scripts/multi_project_runner.py --action build --stage debug_build_{debugLoopInfo.iterationCount} --config-dir "{project_dir}" --modes {projectInfo.projectModes}'
     precheck:
+      - assert: 'debugLoopInfo.iterationExecutionAllowed == true'
+        on_fail:
+          - when: 'projectInfo.finishRequested == true'
+            then:
+              - goto: 19
+            else:
+              - wait_user: "调试循环中未检测到本轮有效源码修改，已阻止编译、下载和监听。请新增有效观测代码或提供新证据。"
       - assert: 'projectInfo.hasBuildProjects == true'
         on_fail:
           - when: 'projectInfo.finishRequested == true'
@@ -376,6 +418,7 @@ steps:
       - update_state:
           debugLoopInfo.lastBuildStatus: "success"
           debugLoopInfo.compileRetryCount: 0
+          debugLoopInfo.baselineBuildPending: false
       - when: 'projectInfo.hasFlashProjects == true'
         then:
           - goto: 10
@@ -409,6 +452,9 @@ steps:
     action: run_script
     call: 'python scripts/multi_project_runner.py --action flash --stage debug_flash_{debugLoopInfo.iterationCount} --config-dir "{project_dir}" --modes {projectInfo.projectModes}'
     precheck:
+      - assert: 'debugLoopInfo.lastBuildStatus == "success"'
+        on_fail:
+          - wait_user: "当前轮没有成功的新构建产物，已阻止下载。请先完成允许的基线编译或有效修改后的编译。"
       - assert: 'projectInfo.hasFlashProjects == true'
         on_fail:
           - goto: 21
@@ -452,9 +498,21 @@ steps:
     what: "等待10秒后启动串口监听，捕获日志（仅编译下载监听模式会到达本步）"
     action: run_script
     call: 'python scripts/multi_project_runner.py --action serial --stage debug_serial_{debugLoopInfo.iterationCount} --config-dir "{project_dir}" --modes {projectInfo.projectModes} --delay 10 --duration 30 --save "debug_log.txt"'
-    precheck: []
+    precheck:
+      - assert: 'debugLoopInfo.iterationExecutionAllowed == true'
+        on_fail:
+          - when: 'projectInfo.observeExistingSerial == true'
+            then:
+              - log:
+                  level: info
+                  msg: "显式观察板上已有固件，允许采集日志"
+            else:
+              - wait_user: "本轮无有效源码修改且未显式观察已有固件，已阻止重复串口监听。"
     pre_action: []
     on_success:
+      - update_state:
+          debugLoopInfo.iterationNewEvidence: true
+          debugLoopInfo.iterationExecutionAllowed: false
       - goto: 12
     on_failure:
       - update_state:
@@ -476,7 +534,11 @@ steps:
       hint: |
         判断日志是否足以定位根因：
           - 找到根因 → --ack success 推进。
-          - 有方向但未定位 → --ack failure（引擎推进迭代，iterationCount+1 回到加打印）
+          - 有方向但未定位，且已设计下一轮不同的有效观测 → 先设置
+            debugLoopInfo.nextObservationPlanned=true、nextObservationSummary=<具体文件/变量/分支>，
+            再 --ack failure；引擎才允许 iterationCount+1 回到加打印。
+          - 没有新增观测方案，或本轮既无源码修改又无新证据 → 不得继续空转；
+            保持 nextObservationPlanned=false 后 --ack failure，引擎立即 wait_user，且不增加轮次。
           - 没有信心、需要向用户追问 → 先 --set debugLoopInfo.askUser=true 再 --ack failure
             （引擎会进入追问环节，最多追问 meta.max_ask 次，超过转人工求助）
     precheck: []
@@ -485,6 +547,7 @@ steps:
       - update_state:
           debugLoopInfo.rootCauseFound: true
           debugLoopInfo.iterationExhausted: false
+          debugLoopInfo.nextObservationPlanned: false
       - goto: 14            # 跳过追问环节，直接进入验证阶段
     on_failure:
       - when: "debugLoopInfo.askUser == true"
@@ -504,19 +567,29 @@ steps:
                   msg: "AI 没信心，进入追问环节"
               - goto: 13           # 追问用户
         else:
-          - when: "debugLoopInfo.iterationCount >= 8"
+          - when: 'debugLoopInfo.nextObservationPlanned == false'
             then:
-              - log:
-                  level: error
-                  msg: "连续 8 轮迭代未定位根因，转入临时调试代码清理与未解决报告流程"
-              - update_state:
-                  debugLoopInfo.iterationExhausted: true
-              - goto: 19
+              - wait_user: "当前分析未形成下一轮不同且可执行的观测方案，已阻止无修改、无编译、无下载的空循环。请提供新方向或允许新增具体观测点后恢复。"
             else:
-              - update_state:
-                  debugLoopInfo.iterationCount: "+1"
-                  debugLoopInfo.loopReason: "当前日志证据不足，继续补充 CHESHI 观测"
-              - goto: 8            # 返回加打印，继续迭代
+              - when: "debugLoopInfo.iterationCount >= 8"
+                then:
+                  - log:
+                      level: error
+                      msg: "连续 8 轮有效迭代未定位根因，转入临时调试代码清理与未解决报告流程"
+                  - update_state:
+                      debugLoopInfo.iterationExhausted: true
+                  - goto: 19
+                else:
+                  - update_state:
+                      debugLoopInfo.iterationCount: "+1"
+                      debugLoopInfo.loopReason: "已形成新的有效观测方案，进入下一轮"
+                      debugLoopInfo.iterationChangeStatus: "pending"
+                      debugLoopInfo.iterationChangeSummary: ""
+                      debugLoopInfo.iterationCodeChanged: false
+                      debugLoopInfo.iterationExecutionAllowed: false
+                      debugLoopInfo.iterationNewEvidence: false
+                      debugLoopInfo.nextObservationPlanned: false
+                  - goto: 8            # 返回加打印，继续有效迭代
 
   - seq: 13
     id: step_ask_clarify
