@@ -2,15 +2,14 @@
 
 > 本清单在「每次调试迭代完成后」以及「最终回归验证」时逐项核对。
 > 每一项都给出**验证方法**与**验收标准**，全部打勾方可进入下一步或出报告。
-> 配置/路径约定：`{工作区}/.copilot/embedded-debug-config.json`（工程配置）、
-> `{工作区}/.copilot/报告/{日期}_{简述}.md`（报告）、
-> `{工作区}/.copilot/logs/verify_log_p<下标>_<项目名>.txt`（项目独立验证日志）。
+> 配置、报告和日志目录均由 `scripts/path_config.py` 根据集中配置生成；禁止在检查步骤中
+> 自行拼接目录。验证日志采用 `verify_log_p<下标>_<项目名>.txt` 的项目独立名称。
 
 ---
 
 ## 0. 调试前准备（每次新任务必查）
 
-- [ ] **配置已生成且完整**：`{工作区}/.copilot/embedded-debug-config.json` 存在，运行
+- [ ] **配置已生成且完整**：集中路径解析得到的工作区配置文件存在，运行
       `python scripts/config_reader.py --validate` 输出 `✅ 配置完整`
       - 缺失 `keil.uv4_path` → 配置生成失败，重新 `/kzl init`
       - 某 `projects[i].serial.port/baud` 或 `projects[i].debugger.com` 缺失 → 该工程不合格
@@ -54,8 +53,8 @@
 - [ ] **无乱码**：乱码时核对 `serial` 的 `baud`/`parity`/`data_bits`/`stop_bits` 与板端一致
 - [ ] **端口占用处理**：`Access to COM port is denied` → 关闭占用该串口的其它工具后重试
 - [ ] **信息充分可定位**：关键变量、时序、收发对照齐全，足以支撑故障定位（不止 `here`/`ok`）
-- [ ] **日志已保存**：每个项目的验证日志分别写入
-      `{工作区}/.copilot/logs/verify_log_p<下标>_<项目名>.txt`
+- [ ] **日志已保存**：每个项目的验证日志分别写入集中配置定义的日志目录，文件名为
+      `verify_log_p<下标>_<项目名>.txt`
 
 ---
 
@@ -88,7 +87,7 @@
 
 ## 7. 报告与记忆
 
-- [ ] **报告生成**：`{工作区}/.copilot/报告/{日期}_{简述}.md` 含
+- [ ] **报告生成**：集中配置定义的报告目录中已生成 `{日期}_{简述}.md`，且包含
       对话背景 / 环境配置 / 复现步骤 / 排查时间线 / 证据链 / 根因分析 / 修复原理 /
       变更文件 / 验证结果与边界 / 回归风险 / 后续建议，并明确所有未验证事项
 - [ ] **索引写入**：追加到 `data/debug-history.yaml`（date/desc/fault/root_cause/status/verification/report/source）

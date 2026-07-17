@@ -1,18 +1,27 @@
 {
-  "keil": {
-    "uv4_path": "C:\\Keil_v5\\UV4\\UV4.exe"
+  "paths": {
+    "copilot_dir": ".copilot",
+    "workspace_data_dir": ".embedded-debug-workflow",
+    "config_filename": "embedded-debug-config.json",
+    "state_dir": ".54188",
+    "flow_gate_filename": "flow-gate.json",
+    "project_results_filename": "project-results.json",
+    "logs_dir": "logs",
+    "reports_dir": "报告"
   },
-  "serial": {
-    "port": "COM19",
-    "baudrate": 256000,
-    "bytesize": 8,
-    "parity": "N",
-    "stopbits": 1,
-    "timeout": 3
+  "defaults": {
+    "keil_uv4_path": "C:\\Keil_v5\\UV4\\UV4.exe",
+    "serial_port": "COM1",
+    "serial_baud": 256000,
+    "serial_data_bits": 8,
+    "serial_stop_bits": 1,
+    "serial_parity": "None",
+    "debugger_type": "JLink",
+    "debugger_com": "COM1",
+    "ai_progress_display": true
   },
-  "jlink": {
-    "device": "STM32H753ZI",
-    "interface": "SWD",
-    "speed": 4000
+  "timeouts": {
+    "build_idle_seconds": 180,
+    "flash_seconds": 120
   }
 }

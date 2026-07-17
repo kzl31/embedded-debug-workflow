@@ -16,7 +16,7 @@
 
 ```yaml
 action: check_file
-path: "{workspace_dir}/.copilot/embedded-debug-config.json"
+path: "由 scripts/path_config.py 根据 workspace_dir 解析的工作区配置文件"
 规则:
   - workspace_dir 默认取当前 VS Code 工作区根目录
   - 多根工作区优先取当前活动文件所属工作区

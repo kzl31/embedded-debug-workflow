@@ -6,9 +6,9 @@
   2. `--read/--validate` — 读取/校验配置
   3. 作为模块导入：load_config(config_dir) / save_config(data, config_dir)
 
-配置文件名固定为 `embedded-debug-config.json`，存放在**工作区第一级**的
-`.copilot/` 子目录下。初始化时由 `--init <工作区目录>` 在该目录直接生成
-（不做向上查找）。
+配置文件名和工作区 Skill 数据目录由 `scripts/skill-config.json` 集中定义，
+并由 `path_config.py` 解析。初始化时由 `--init <工作区目录>` 直接生成，
+不做向上查找。
 
 配置为 JSON 文件（不使用空格/竖线对齐的文本表，避免歧义）。每个工程独立携带
 自己的串口与下载器参数，从而建立「工程文件路径 ↔ 串口 ↔ 下载器」的对应关系：
@@ -39,57 +39,23 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-# ── 常量 ──────────────────────────────────────────────────────────────
+from path_config import (
+    CONFIG_FILENAME,
+    DEFAULT_AI_PROGRESS_DISPLAY,
+    DEFAULT_BAUD,
+    DEFAULT_DATA_BITS,
+    DEFAULT_DEBUGGER_TYPE,
+    DEFAULT_PARITY,
+    DEFAULT_STOP_BITS,
+    DEFAULT_UV4_PATH,
+    PATHS,
+    WORKSPACE_DATA_DIR,
+    project_log_path,
+    resolve_workspace_dir,
+    safe_project_name,
+)
 
-CONFIG_FILENAME = "embedded-debug-config.json"
-"""配置文件名，固定存放在工作区第一级目录的 `.copilot/` 子目录下。"""
-
-DEFAULT_UV4_PATH = r"C:\Keil_v5\UV4\UV4.exe"
-DEFAULT_BAUD = 256000
-DEFAULT_DATA_BITS = 8
-DEFAULT_STOP_BITS = 1
-DEFAULT_PARITY = "None"
-DEFAULT_DEBUGGER_TYPE = "JLink"
-
-
-def resolve_workspace_dir(
-    config_dir: str | Path | None = None,
-    config: dict[str, Any] | None = None,
-) -> Path:
-    """解析工作区根目录，不使用工程目录或当前目录的启发式向上查找。
-
-    优先采用配置内初始化时记录的 ``workspace``；其次根据 ``config_dir``
-    （工作区目录或配置文件路径）确定。调用方应尽量显式传入 ``config_dir``。
-    """
-    if config and config.get("workspace"):
-        return Path(str(config["workspace"])).resolve()
-    if config_dir is not None:
-        path = Path(config_dir).resolve()
-        if path.is_file() or path.name == CONFIG_FILENAME:
-            return path.parent.parent if path.parent.name == ".copilot" else path.parent
-        return path
-    return Path.cwd().resolve()
-
-
-def safe_project_name(name: str) -> str:
-    """生成可用于 Windows 日志文件名的项目标识。"""
-    safe = "".join(char if char.isalnum() or char in "-_" else "_" for char in name)
-    return safe.strip("_.") or "project"
-
-
-def project_log_path(
-    config_dir: str | Path | None,
-    config: dict[str, Any],
-    project_index: int,
-    project_name: str,
-    log_type: str,
-    suffix: str = ".txt",
-) -> Path:
-    """返回项目独立日志路径：``{工作区}/.copilot/logs/{类型}_pN_{名称}.txt``。"""
-    workspace = resolve_workspace_dir(config_dir, config)
-    filename = f"{safe_project_name(log_type)}_p{project_index}_{safe_project_name(project_name)}{suffix}"
-    return workspace / ".copilot" / "logs" / filename
-DEFAULT_AI_PROGRESS_DISPLAY = True
+# ── 常量由 path_config.py / skill-config.json 集中提供 ───────────────
 
 # ── 路径解析 ──────────────────────────────────────────────────────────
 
@@ -102,26 +68,26 @@ def resolve_config_path(path_or_dir: str | Path | None = None) -> Path:
     """将用户传入的路径解析为实际配置文件路径（不做向上查找）。
 
     规则：
-    - 路径为空 → 当前工作区的 `.copilot/{CONFIG_FILENAME}`
+    - 路径为空 → 当前工作区中由集中配置解析出的配置文件
     - 路径指向已存在的文件 → 直接返回
-    - 路径指向目录 → 该目录下的 `.copilot/{CONFIG_FILENAME}`（即工作区配置）
+    - 路径指向目录 → 该目录下的统一 Skill 数据目录（即工作区配置）
     """
     if path_or_dir is None:
-        return Path.cwd() / ".copilot" / CONFIG_FILENAME
+        return Path.cwd() / WORKSPACE_DATA_DIR / CONFIG_FILENAME
 
     p = Path(path_or_dir).resolve()
     if p.is_file():
         return p
-    return p / ".copilot" / CONFIG_FILENAME
+    return p / WORKSPACE_DATA_DIR / CONFIG_FILENAME
 
 
 def get_config_path(save_dir: str | Path | None = None) -> Path:
-    """返回配置文件写入路径（工作区第一级 `.copilot/` 下，不向上查找）。"""
+    """返回配置文件写入路径（工作区统一 Skill 数据目录，不向上查找）。"""
     if save_dir:
         path = Path(save_dir).resolve()
         if path.name == CONFIG_FILENAME:
             return path
-        return path / ".copilot" / CONFIG_FILENAME
+        return path / WORKSPACE_DATA_DIR / CONFIG_FILENAME
     return resolve_config_path(None)
 
 
@@ -131,13 +97,13 @@ def load_config(config_dir: str | Path | None = None) -> dict[str, Any]:
     """读取配置文件，文件不存在或格式错误时返回空字典。
 
     config_dir 可以是：
-    - None → 当前工作区的 `.copilot/{CONFIG_FILENAME}`
-    - 目录路径 → 该目录下的 `.copilot/{CONFIG_FILENAME}`（即工作区配置）
+    - None → 当前工作区中由集中配置解析出的配置文件
+    - 目录路径 → 该工作区的集中配置文件
     - 文件路径 → 直接读取该文件
     """
     if config_dir is not None:
         p = Path(config_dir)
-        path = p if p.is_file() else (p / ".copilot" / CONFIG_FILENAME)
+        path = p if p.is_file() else (p / WORKSPACE_DATA_DIR / CONFIG_FILENAME)
     else:
         path = resolve_config_path(None)
     if not path.is_file():
@@ -162,8 +128,8 @@ def save_config(data: dict[str, Any], save_dir: str | Path | None = None) -> Pat
 
 
 def find_config_in_project(project_dir: str | Path) -> Path | None:
-    """在指定工作区目录的 `.copilot/` 下查找配置文件，找不到返回 None（不向上查找）。"""
-    candidate = Path(project_dir).resolve() / ".copilot" / CONFIG_FILENAME
+    """在指定工作区统一 Skill 数据目录查找配置，不向上查找。"""
+    candidate = Path(project_dir).resolve() / WORKSPACE_DATA_DIR / CONFIG_FILENAME
     return candidate if candidate.exists() else None
 
 
@@ -345,7 +311,8 @@ def _new_project_config(project_file: Path) -> dict[str, Any]:
 def init_project(workspace_dir: str, project_count: int | None = None) -> dict[str, Any]:
     """扫描工作区并生成或增量更新 Keil 工程配置。"""
     root = Path(workspace_dir).resolve()
-    config_path = root / ".copilot" / CONFIG_FILENAME
+    config_path = root / WORKSPACE_DATA_DIR / CONFIG_FILENAME
+    legacy_config_path = root / PATHS["copilot_dir"] / CONFIG_FILENAME
     print("=" * 50)
     print(f"🔧 嵌入式调试初始化 — 工作区: {root}")
     print("=" * 50)
@@ -357,7 +324,9 @@ def init_project(workspace_dir: str, project_count: int | None = None) -> dict[s
         print(f"❌ 当前工作区未找到 .uvprojx 或 .uvproj 工程文件: {root}")
         raise FileNotFoundError("当前工作区没有可初始化的 Keil 工程")
 
-    config = load_config(config_path) if config_path.is_file() else {}
+    # 首次使用新目录时读取旧位置配置并迁移，避免丢失人工串口/下载器参数。
+    source_config_path = config_path if config_path.is_file() else legacy_config_path
+    config = load_config(source_config_path) if source_config_path.is_file() else {}
     existing_projects = config.get("projects", [])
     existing_paths = {
         str((Path(item.get("dir", "")) / item.get("file", "")).resolve()).casefold()
@@ -380,13 +349,13 @@ def init_project(workspace_dir: str, project_count: int | None = None) -> dict[s
     print(f"\n发现 {len(discovered)} 个 Keil 工程：")
     for project_file in discovered:
         print(f"  - {project_file}")
-    if config_path.is_file():
+    if source_config_path.is_file():
         print(f"\n♻️ 已保留原有工程参数，新增 {added} 个扫描到的工程")
 
     # ── 保存 ───────────────────────────────────────────────────────
     save_config(config, save_dir=root)
     print(f"\n✅ 初始化完成！配置文件已生成:")
-    print(f"   {root / '.copilot' / CONFIG_FILENAME}")
+    print(f"   {root / WORKSPACE_DATA_DIR / CONFIG_FILENAME}")
     print("   工程路径已按当前工作区生成；Keil、串口和下载器等参数保持默认值")
 
     return config

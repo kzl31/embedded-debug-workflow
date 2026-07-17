@@ -9,7 +9,7 @@
 
 3. **CHESHI 统一宏规范** — 全局仅使用 `CHESHI` 单一调试总开关（Bit 位掩码或数值分级）；所有新增调试输出、采集器和 Flush 路径必须受 `CHESHI` 包裹。通信层/ISR 仅采集快照，由 `main` 主循环输出；宏定义集中写在 `main.c` 头部，调试结束整段删除。详见 `refs/cheshi-macro.md`。
 
-4. **动态路径加载规则** — 流程引擎的 `--project` 为历史兼容参数名，必须传当前 VS Code **工作区根目录**，不得传 Skill 仓库目录或某个 Keil 工程目录。工作区配置固定读取 `{工作区}/.copilot/embedded-debug-config.json`；状态、日志和报告均写入 `{工作区}/.copilot/`，实际源码目录和工程文件从配置的 `projects[*]` 解析。日志文件必须包含项目下标和名称，禁止多项目覆盖。`uv4_path` 固定为 `C:\Keil_v5\UV4\UV4.exe` 自动填入，不询问用户。详见 `refs/config-format.md`。
+4. **动态路径加载规则** — 流程引擎的 `--project` 为历史兼容参数名，必须传当前 VS Code **工作区根目录**，不得传 Skill 仓库目录或某个 Keil 工程目录。工作区配置、状态、日志和报告的路径必须由 `scripts/path_config.py` 根据 `scripts/skill-config.json` 生成，禁止在 Python、YAML 或 Markdown 中重复拼接；实际源码目录和工程文件从配置的 `projects[*]` 解析。日志文件必须包含项目下标和名称，禁止多项目覆盖。Keil 默认路径由集中配置自动填入，不询问用户。详见 `refs/config-format.md` 和 `refs/runtime-config.md`。
 
 5. **8 轮迭代上限** — 自动加打印满 8 轮仍无法定位故障时，必须触发人工求助。详见 `refs/debug-loop.md`。
 

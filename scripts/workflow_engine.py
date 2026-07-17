@@ -51,6 +51,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from path_config import (
+    CONFIG_FILENAME,
+    FLOW_GATE_FILENAME,
+    LOGS_DIRNAME,
+    PROJECT_RESULTS_FILENAME,
+    REPORTS_DIRNAME,
+    SETTINGS,
+    STATE_DIR,
+    WORKSPACE_DATA_DIR,
+)
+
 try:
     import yaml
 except ImportError:
@@ -69,9 +80,6 @@ except ImportError:
 SKILL_DIR = Path(__file__).resolve().parent.parent
 FLOW_YAML_PATH = SKILL_DIR / "flow.yaml"
 TEMPLATES_DIR = SKILL_DIR / "templates"
-STATE_DIR = ".copilot/.54188"
-FLOW_GATE_FILENAME = "flow-gate.json"
-PROJECT_RESULTS_FILENAME = "project-results.json"
 
 # 动作类型分类
 AUTO_TYPES = {"run_script", "check_file", "read_config", "noop", "exit", "update_state"}
@@ -154,7 +162,7 @@ def get_project_results_path(project_dir: str) -> Path:
 
 
 def get_config_path(project_dir: str) -> Path:
-    return Path(project_dir) / ".copilot" / "embedded-debug-config.json"
+    return Path(project_dir) / WORKSPACE_DATA_DIR / CONFIG_FILENAME
 
 
 def load_progress_display_enabled(project_dir: str) -> bool:
@@ -458,9 +466,9 @@ class WorkflowEngine:
         # 预创建日志与报告目录：UV4 / 串口脚本不会自动创建目录，
         # 若目录不存在会直接报"创建文件失败"，导致编译/监听日志无法落盘。
         try:
-            copilot_dir = Path(self.project_dir) / ".copilot"
-            logs_dir = copilot_dir / "logs"
-            report_dir = copilot_dir / "报告"
+            data_dir = Path(self.project_dir) / WORKSPACE_DATA_DIR
+            logs_dir = data_dir / LOGS_DIRNAME
+            report_dir = data_dir / REPORTS_DIRNAME
             os.makedirs(logs_dir, exist_ok=True)
             os.makedirs(report_dir, exist_ok=True)
             print(f"[init] 📁 已预创建目录: {logs_dir}")
@@ -794,7 +802,7 @@ class WorkflowEngine:
                               seq=step.get("seq"), id=step.get("id"),
                               phase=step.get("phase"), action=step.get("action"),
                               what=step.get("what"),
-                              params=step.get("params", {}),
+                              params=self._resolve_templates(step.get("params", {})),
                               forbidden=self._phase_forbidden(step.get("phase")))
         result["next_action"] = (
             f'{self.engine_bin} --project "{self.project_dir}" --ack success'
@@ -858,13 +866,32 @@ class WorkflowEngine:
 
     def _get_path(self, path: str) -> Any:
         parts = path.split(".")
-        cur: Any = self.fg
+        if parts and parts[0] == "settings":
+            cur: Any = SETTINGS
+            parts = parts[1:]
+        else:
+            cur = self.fg
         for p in parts:
             if isinstance(cur, dict) and p in cur:
                 cur = cur[p]
             else:
                 return ""
         return cur
+
+    def _resolve_templates(self, value: Any) -> Any:
+        """递归展开 AI 参数中的工作区和集中配置占位符。"""
+        if isinstance(value, str):
+            text = resolve_path(value, self.project_dir)
+            return re.sub(
+                r"\{(settings\.[\w.]+)\}",
+                lambda match: str(self._get_path(match.group(1))),
+                text,
+            )
+        if isinstance(value, list):
+            return [self._resolve_templates(item) for item in value]
+        if isinstance(value, dict):
+            return {key: self._resolve_templates(item) for key, item in value.items()}
+        return value
 
     def _eval_condition(self, cond: str) -> bool:
         cond = (cond or "").strip()

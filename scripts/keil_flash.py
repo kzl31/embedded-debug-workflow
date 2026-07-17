@@ -25,6 +25,7 @@ from config_reader import (
     project_log_path,
     safe_project_name,
 )
+from path_config import FLASH_TIMEOUT_SECONDS, LOGS_DIRNAME, WORKSPACE_DATA_DIR
 
 
 def find_uv4(config: dict | None = None) -> str | None:
@@ -67,7 +68,9 @@ def flash_project(
 
     # 与编译日志一致：高层调用显式传工作区项目日志；低层直调仅做局部回退。
     fallback_name = f"flash_log_{safe_project_name(Path(project_file).stem)}.txt"
-    log_path = log_file or str(proj_dir / ".copilot" / "logs" / fallback_name)
+    log_path = log_file or str(
+        proj_dir / WORKSPACE_DATA_DIR / LOGS_DIRNAME / fallback_name
+    )
     Path(log_path).parent.mkdir(parents=True, exist_ok=True)
     Path(log_path).write_text("", encoding="utf-8")
     cmd = f'"{uv4_path}" -f "{project_file}" -o "{log_path}"'
@@ -77,10 +80,14 @@ def flash_project(
 
     try:
         result = subprocess.run(
-            cmd, cwd=project_dir, shell=True, capture_output=True, text=True, timeout=120
+            cmd, cwd=project_dir, shell=True, capture_output=True, text=True,
+            timeout=FLASH_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
-        return {"status": "failure", "summary": "下载超时（>120s）"}
+        return {
+            "status": "failure",
+            "summary": f"下载超时（>{FLASH_TIMEOUT_SECONDS:g}s）",
+        }
 
     # 读取日志
     log_content = ""

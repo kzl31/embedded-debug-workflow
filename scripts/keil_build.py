@@ -31,6 +31,7 @@ from config_reader import (
     project_log_path,
     safe_project_name,
 )
+from path_config import BUILD_IDLE_TIMEOUT_SECONDS, LOGS_DIRNAME, WORKSPACE_DATA_DIR
 
 
 def find_uv4(config: dict | None = None) -> str | None:
@@ -91,7 +92,9 @@ def build_project(
     # 高层调用必须传入由工作区配置解析出的项目独立日志路径。仅直接调用
     # build_project() 时采用工程目录旁的兼容回退，禁止向上猜测已有 .copilot。
     fallback_name = f"build_log_{safe_project_name(Path(project_file).stem)}.txt"
-    log_path = log_file or str(proj_dir / ".copilot" / "logs" / fallback_name)
+    log_path = log_file or str(
+        proj_dir / WORKSPACE_DATA_DIR / LOGS_DIRNAME / fallback_name
+    )
     Path(log_path).parent.mkdir(parents=True, exist_ok=True)
     # 每次编译使用空日志，避免上一次残留内容被误判为本次实时输出。
     Path(log_path).write_text("", encoding="utf-8")
@@ -106,7 +109,7 @@ def build_project(
     print(f"[keil_build]   命令: {cmd}")
 
     # 日志无输出看门狗：用于识别 UV4 启动后卡死、等待不可见对话框等情况。
-    idle_timeout = 180.0
+    idle_timeout = BUILD_IDLE_TIMEOUT_SECONDS
     start_time = time.monotonic()
     last_output_time = start_time
     previous_log_state: tuple[int, int] | None = None

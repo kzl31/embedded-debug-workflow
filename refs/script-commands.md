@@ -15,8 +15,10 @@ python scripts/keil_build.py --project "RU3.uvprojx" --rebuild
 python scripts/build_and_flash.py
 
 # 串口抓日志
-python scripts/serial_monitor.py --duration 15 --save .copilot/logs/output.log
+python scripts/multi_project_runner.py --action serial --config-dir "<工作区>" --modes "<逐项目模式>" --duration 15 --save output.log
 ```
+
+> `--save` 是基础文件名；日志目录和项目后缀由集中配置及 `path_config.py` 自动生成。
 
 ## 脚本索引
 

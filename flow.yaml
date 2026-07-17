@@ -95,17 +95,36 @@ steps:
     action: ask_user
     params:
       template: |
-        读取工作区 .copilot/embedded-debug-config.json。projects 数组是项目列表的唯一依据：
-        用户可以自行增加、删除或重排项目，不得使用 project_count 推断实际数量。
-        向用户展示每个项目的下标、name、dir、file、serial 和 debugger，然后询问：
-          1. 本次使用哪份配置？【按现在配置进行 / 已修改配置，按照最新进行】
-          2. 对 projects 中每一个项目分别询问本次模式：
+        配置确认和项目模式选择必须严格分成 A、B 两段执行，禁止在用户确认配置前预先生成
+        项目模式问题，也禁止复用本步骤开始时读取的 projects 缓存。
+
+        A. 确认配置版本
+        1. 首次读取工作区
+          {settings.paths.copilot_dir}/{settings.paths.workspace_data_dir}/{settings.paths.config_filename}，
+          展示当前 projects 摘要后，只询问：
+          “本次使用哪份配置？”【按现在配置进行 / 已修改配置，按照最新进行】。
+        2. 必须等待用户回答后才能进入 B，不得同时询问项目模式。
+        3. 若用户选择“已修改配置，按照最新进行”，必须在收到回答后执行：
+          - 重新从磁盘读取配置文件，禁止使用此前读取结果、对话中的旧列表或 project_count；
+          - 运行 config_reader.py --validate --path <配置文件>；
+          - 校验失败时仅提示用户修正，修正后再次重新读取和校验，不得进入 B；
+          - 校验成功后丢弃旧 projects、旧下标、旧 name 与尚未提交的旧 projectModes，
+            并向用户展示重新读取后的每个项目下标、name、dir、file、serial 和 debugger。
+        4. 若用户选择“按现在配置进行”，B 使用 A 中刚刚展示并得到确认的配置快照。
+
+        B. 按最终配置询问项目模式
+        projects 数组是项目列表的唯一依据；用户可以增加、删除或重排项目，不得使用
+        project_count 推断实际数量。必须针对 A 阶段最终确认或重新读取后的 projects，按最新数组
+        顺序逐一询问，项目数量、下标、name 和参数均以该最终快照为准：
+          对于“<最新 projects[i].name>”项目，您的选择是：
              【不编译不下载(none)】
              【仅编译(compile_only)】
              【编译下载(compile_flash)】
              【编译下载监听(full)】
         四个选项均不设置默认值或推荐值；每一个项目都必须得到用户的明确选择，禁止根据
         当前文档、历史选择或其他项目的选择自动填充。
+        name 是项目显示与结果对应标识，必须取自最终配置，禁止沿用修改前的 name。
+
           skipBuild、skipFlash、observeExistingSerial 和 finishRequested 禁止向用户逐项询问，必须由 AI
           根据用户开场意图、当前故障阶段和已有证据自动判断：
             - 正常修改并验证：四项均为 false。
@@ -115,9 +134,9 @@ steps:
               skipBuild=true、skipFlash=true、observeExistingSerial=false、finishRequested=true。
             - 仅需下载已有产物：skipBuild=true、skipFlash=false；仅需编译：skipBuild=false、skipFlash=true。
           AI 应直接设置参数并简短告知判断结果，不得把这些内部控制参数作为问题要求用户选择。
-        若配置未完成，提示用户直接修改该 JSON；修改后运行
+        若配置未完成，提示用户直接修改该 JSON；修改后必须重新读取并运行
         config_reader.py --validate --path <配置文件>，校验通过才能确认完成。
-        最后依次记录：
+        只有 B 阶段已针对最终配置完成全部项目模式询问后，才允许依次记录：
           - --set projectInfo.projectCount=<projects数组实际长度>
           - --set projectInfo.currentProjectIndex=<当前文档所属项目在 projects 数组中的下标>
           - --set projectInfo.projectModes=<按项目下标排列的逗号分隔模式，如 compile_only,compile_flash>
@@ -127,9 +146,10 @@ steps:
           - --set projectInfo.finishRequested=<true|false>
           - --set projectInfo.configConfirmed=<true|false>
           - --ack success 推进。
-        先根据当前文档所属工程确定 currentProjectIndex；无法唯一确定时必须询问用户，禁止
-        默认猜测。
-        projectModes 项数必须与 projects 数组长度完全一致。后续编译、下载和串口监听
+        projectCount、currentProjectIndex 和 projectModes 必须全部根据 A 阶段最终配置重新计算；
+        先根据当前文档所属工程确定 currentProjectIndex，无法唯一确定时必须询问用户，禁止
+        默认猜测。若配置刷新前已经设置过这些状态字段，必须用最终配置结果覆盖。
+        projectModes 项数必须与最终 projects 数组长度完全一致。后续编译、下载和串口监听
         必须逐项目读取 projectModes，并叠加全局跳过参数：none 跳过全部，compile_only 只编译，
         compile_flash 编译+下载但不监听，full 编译+下载+监听；skipBuild=true 跳过所有编译步骤，
         skipFlash=true 跳过所有下载步骤；observeExistingSerial=true 时直接监听板上已有固件；
@@ -624,7 +644,7 @@ steps:
     action: analyze
     params:
       mode: verify_fix
-      log_pattern: "{project_dir}/.copilot/logs/verify_log_p*_<项目名>.txt"
+      log_pattern: "{project_dir}/{settings.paths.copilot_dir}/{settings.paths.workspace_data_dir}/{settings.paths.logs_dir}/verify_log_p*_<项目名>.txt"
       note: |
         mode=full 的项目必须分别读取其验证日志，确认观测窗口内修复检测条件成立、
         原故障未复现、CHESHI 观测值符合预期且无新增错误，才能 --ack success 推进。
@@ -713,7 +733,7 @@ steps:
         - "串口参数与配置一致：监听端口/波特率取自对应工程的 serial"
         - "编译输出 0 Error、无阻塞性 Warning"
         - "固件下载成功：日志出现 Flash Load finished / Verify OK"
-        - "每个项目的验证日志已分别保存到 {工作区}/.copilot/logs/verify_log_p<下标>_<项目名>.txt"
+        - "每个项目的验证日志已分别保存到工作区 Skill 专属数据目录；目录与命名以 scripts/skill-config.json 为准"
         - "调试打印信息充分，可支撑故障定位"
         - "业务修改仅影响目标模块，无连锁副作用（长度/偏移/缓冲区边界已复核）"
         - "原故障现象消失，其它模块（通信/定时器/中断/外设）正常"
@@ -736,7 +756,7 @@ steps:
     action: report
     params:
       report_template: "templates/report.md"
-      report_path: "{project_dir}/.copilot/报告/{date}_{short_desc}.md"
+      report_path: "{project_dir}/{settings.paths.copilot_dir}/{settings.paths.workspace_data_dir}/{settings.paths.reports_dir}/{date}_{short_desc}.md"
       requirements: |
         必须填写模板全部 11 节，并以当前对话为主线，结合源码、Git 差异、流程状态、
         编译/下载输出和串口日志形成可追溯证据链。记录失败尝试、排除过程、修复原理、

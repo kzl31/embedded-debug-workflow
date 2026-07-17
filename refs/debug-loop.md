@@ -143,8 +143,11 @@ python scripts/build_and_flash.py
 python scripts/serial_read.py --timeout 3
 
 # 持续监听（捕获完整启动日志）
-python scripts/serial_monitor.py --duration 15 --save .copilot/logs/debug_round_1.log
+python scripts/multi_project_runner.py --action serial --config-dir "<工作区>" --modes "<逐项目模式>" --duration 15 --save debug_round_1.log
 ```
+
+> `--save` 只传日志基础文件名；实际目录和项目独立文件名由
+> `scripts/path_config.py` 根据 `scripts/skill-config.json` 生成，禁止在文档中拼接路径。
 
 ### 第 6 步：分析日志
 

@@ -21,6 +21,7 @@ from config_reader import (
     project_log_path,
     resolve_workspace_dir,
 )
+from path_config import PROJECT_RESULTS_FILENAME, STATE_DIR
 from keil_build import build_project, find_uv4
 from keil_flash import flash_project
 from serial_monitor import monitor_serial
@@ -74,7 +75,7 @@ def write_project_results(
     """原子写出本次逐项目执行结果，供工作流引擎合并。"""
     config = load_config(config_dir)
     workspace = resolve_workspace_dir(config_dir, config)
-    result_path = workspace / ".copilot" / ".54188" / "project-results.json"
+    result_path = workspace / STATE_DIR / PROJECT_RESULTS_FILENAME
     result_path.parent.mkdir(parents=True, exist_ok=True)
     payload: dict = {"stages": {}}
     if result_path.is_file():
@@ -106,7 +107,7 @@ def successful_indices(config_dir: str, stage: str) -> set[int]:
     """读取同一阶段已成功的项目下标，用于失败重试时只执行失败项目。"""
     config = load_config(config_dir)
     workspace = resolve_workspace_dir(config_dir, config)
-    result_path = workspace / ".copilot" / ".54188" / "project-results.json"
+    result_path = workspace / STATE_DIR / PROJECT_RESULTS_FILENAME
     if not result_path.is_file():
         return set()
     try:
