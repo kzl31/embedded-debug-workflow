@@ -95,22 +95,24 @@ steps:
     action: ask_user
     params:
       template: |
-        配置确认和项目模式选择必须严格分成 A、B 两段执行，禁止在用户确认配置前预先生成
-        项目模式问题，也禁止复用本步骤开始时读取的 projects 缓存。
+        本步骤受引擎配置指纹硬门禁约束。配置确认和项目模式选择必须严格分成 A、B 两段，
+        禁止在用户确认配置前预先生成项目模式问题，也禁止复用先前读取的 projects 缓存。
 
         A. 确认配置版本
-        1. 首次读取工作区
-          {settings.paths.copilot_dir}/{settings.paths.workspace_data_dir}/{settings.paths.config_filename}，
-          展示当前 projects 摘要后，只询问：
+        1. 首先必须执行：
+          python scripts/workflow_engine.py --project "{project_dir}" --reload-config
+          只能使用该命令 JSON 返回的 projects 展示当前配置摘要，然后只询问：
           “本次使用哪份配置？”【按现在配置进行 / 已修改配置，按照最新进行】。
         2. 必须等待用户回答后才能进入 B，不得同时询问项目模式。
         3. 若用户选择“已修改配置，按照最新进行”，必须在收到回答后执行：
-          - 重新从磁盘读取配置文件，禁止使用此前读取结果、对话中的旧列表或 project_count；
-          - 运行 config_reader.py --validate --path <配置文件>；
+          - 再次执行 workflow_engine.py --project "{project_dir}" --reload-config；该命令会从
+            {settings.paths.copilot_dir}/{settings.paths.workspace_data_dir}/{settings.paths.config_filename}
+            重新读取、校验并返回最终 projects；
+          - 禁止使用此前读取结果、对话中的旧列表、旧工具结果或 project_count；
           - 校验失败时仅提示用户修正，修正后再次重新读取和校验，不得进入 B；
-          - 校验成功后丢弃旧 projects、旧下标、旧 name 与尚未提交的旧 projectModes，
-            并向用户展示重新读取后的每个项目下标、name、dir、file、serial 和 debugger。
-        4. 若用户选择“按现在配置进行”，B 使用 A 中刚刚展示并得到确认的配置快照。
+          - 校验成功后只使用该命令本次 JSON 的 projects，向用户展示其中每个项目的
+            index、name、dir、file、serial 和 debugger。
+        4. 若用户选择“按现在配置进行”，B 使用 A 中 --reload-config 返回的配置快照。
 
         B. 按最终配置询问项目模式
         projects 数组是项目列表的唯一依据；用户可以增加、删除或重排项目，不得使用
@@ -135,7 +137,7 @@ steps:
             - 仅需下载已有产物：skipBuild=true、skipFlash=false；仅需编译：skipBuild=false、skipFlash=true。
           AI 应直接设置参数并简短告知判断结果，不得把这些内部控制参数作为问题要求用户选择。
         若配置未完成，提示用户直接修改该 JSON；修改后必须重新读取并运行
-        config_reader.py --validate --path <配置文件>，校验通过才能确认完成。
+        --reload-config，校验通过才能确认完成。
         只有 B 阶段已针对最终配置完成全部项目模式询问后，才允许依次记录：
           - --set projectInfo.projectCount=<projects数组实际长度>
           - --set projectInfo.currentProjectIndex=<当前文档所属项目在 projects 数组中的下标>
@@ -154,6 +156,8 @@ steps:
         compile_flash 编译+下载但不监听，full 编译+下载+监听；skipBuild=true 跳过所有编译步骤，
         skipFlash=true 跳过所有下载步骤；observeExistingSerial=true 时直接监听板上已有固件；
         finishRequested=true 时优先完成 CHESHI 清理、报告和流程结束，不允许编译失败持续阻塞退出。
+        若配置在 --reload-config 后再次被修改，引擎会拒绝写入 projectModes 或 --ack success，
+        必须重新执行 --reload-config 并重新询问全部项目模式。
     precheck: []
     pre_action: []
     on_success:

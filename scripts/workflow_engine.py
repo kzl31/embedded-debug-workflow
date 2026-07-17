@@ -35,6 +35,9 @@ workflow_engine.py — 嵌入式调试工作流「单文件线性序号驱动」
   python workflow_engine.py --project <项目目录> --set KEY=VALUE
       写入状态字段（点号语法，如 --set projectInfo.projectModes=full,compile_only）
 
+  python workflow_engine.py --project <项目目录> --reload-config
+      从磁盘重新读取并校验配置，清除依赖旧 projects 的模式状态
+
 依赖：pip install pyyaml
 """
 
@@ -43,6 +46,7 @@ from __future__ import annotations
 import argparse
 import json
 import base64
+import hashlib
 import os
 import re
 import subprocess
@@ -50,6 +54,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+
+from config_reader import validate_config
 
 from path_config import (
     CONFIG_FILENAME,
@@ -178,6 +184,13 @@ def load_progress_display_enabled(project_dir: str) -> bool:
     return value if isinstance(value, bool) else True
 
 
+def config_fingerprint(config: dict) -> str:
+    """生成配置内容指纹，用于阻止 AI 使用过期 projects 快照。"""
+    canonical = json.dumps(config, ensure_ascii=False, sort_keys=True,
+                           separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def load_flow_gate(project_dir: str) -> dict:
     path = get_flow_gate_path(project_dir)
     if path.exists():
@@ -231,7 +244,10 @@ def _default_flow_gate() -> dict:
             "sourcePreAnalyzed": False,
             "sourceQuickReviewed": False,
             "projectCount": 0,
+            "currentProjectIndex": None,
             "projectModes": "",
+            "configFingerprint": "",
+            "configProjects": [],
             "skipBuild": False,
             "skipFlash": False,
             "observeExistingSerial": False,
@@ -373,6 +389,14 @@ class WorkflowEngine:
             return self._completed()
         if self._is_auto(step):
             return self._result("error", "当前步骤为自动步骤，无需 --ack；请使用 --mode 1")
+        if ok and step.get("id") == "step_confirm_config":
+            error = self._validate_confirmed_config_state()
+            if error:
+                return self._result(
+                    "error", error,
+                    next_action=(
+                        f'{self.engine_bin} --project "{self.project_dir}" '
+                        '--reload-config'))
         actions = step.get("on_success") if ok else step.get("on_failure")
         self._run_actions(actions, default_next=True)
         return self._drive()
@@ -505,8 +529,56 @@ class WorkflowEngine:
             applied[key] = value
         return self._result("state_set", f"已更新状态: {applied}", applied=applied)
 
+    def reload_config(self) -> dict:
+        """强制从磁盘重载配置，并清除所有依赖旧 projects 的运行状态。"""
+        path = get_config_path(self.project_dir)
+        try:
+            config = load_json(path)
+        except (json.JSONDecodeError, OSError) as exc:
+            return self._result("error", f"配置读取失败: {exc}")
+        if not config:
+            return self._result("error", f"配置不存在或为空: {path}")
+        errors = validate_config(config)
+        if errors:
+            return self._result("error", "配置校验失败", errors=errors,
+                                config_path=str(path))
+
+        projects = config.get("projects", [])
+        snapshot = [
+            {
+                "index": index,
+                "name": project.get("name", ""),
+                "dir": project.get("dir", ""),
+                "file": project.get("file", ""),
+                "serial": project.get("serial", {}),
+                "debugger": project.get("debugger", {}),
+            }
+            for index, project in enumerate(projects)
+        ]
+        project_info = self.fg.setdefault("projectInfo", {})
+        project_info.update({
+            "projectCount": len(snapshot),
+            "currentProjectIndex": None,
+            "projectModes": "",
+            "projectRuns": [],
+            "configFingerprint": config_fingerprint(config),
+            "configProjects": snapshot,
+            "configConfirmed": False,
+            "initialQuestionsAnswered": False,
+        })
+        self._sync_execution_flags()
+        save_flow_gate(self.project_dir, self.fg)
+        return self._result(
+            "config_reloaded",
+            f"已从磁盘重新读取并校验配置，共 {len(snapshot)} 个项目；旧项目模式已清除",
+            config_path=str(path), projects=snapshot,
+            required_action="仅针对本次返回的 projects 逐项询问模式")
+
     def _sync_project_modes(self, raw_modes: str) -> None:
         """根据逐项目模式生成能力标志和独立运行状态。"""
+        snapshot_error = self._config_snapshot_error()
+        if snapshot_error:
+            raise ValueError(snapshot_error)
         modes = [item.strip() for item in raw_modes.split(",") if item.strip()]
         valid_modes = {"none", "compile_only", "compile_flash", "full"}
         invalid = [mode for mode in modes if mode not in valid_modes]
@@ -529,6 +601,38 @@ class WorkflowEngine:
         ]
         self._sync_execution_flags()
         save_flow_gate(self.project_dir, self.fg)
+
+    def _config_snapshot_error(self) -> str:
+        """确认状态中的配置快照仍与磁盘文件完全一致。"""
+        path = get_config_path(self.project_dir)
+        try:
+            config = load_json(path)
+        except (json.JSONDecodeError, OSError) as exc:
+            return f"配置读取失败，请先 --reload-config: {exc}"
+        expected = self.fg.get("projectInfo", {}).get("configFingerprint", "")
+        if not expected:
+            return "尚未由引擎重新加载配置，请先执行 --reload-config"
+        if config_fingerprint(config) != expected:
+            return "磁盘配置已修改，旧项目列表失效；请先执行 --reload-config"
+        return ""
+
+    def _validate_confirmed_config_state(self) -> str:
+        """seq 2 硬门禁：禁止以旧配置或不完整模式推进。"""
+        error = self._config_snapshot_error()
+        if error:
+            return error
+        info = self.fg.get("projectInfo", {})
+        projects = info.get("configProjects", [])
+        modes = [item.strip() for item in str(info.get("projectModes", "")).split(",")
+                 if item.strip()]
+        if not projects or len(modes) != len(projects):
+            return "必须针对引擎最新返回的全部 projects 逐项设置 projectModes"
+        current_index = info.get("currentProjectIndex")
+        if not isinstance(current_index, int) or not 0 <= current_index < len(projects):
+            return "currentProjectIndex 未按最新配置设置或已越界"
+        if info.get("projectCount") != len(projects):
+            return "projectCount 与引擎最新配置快照不一致"
+        return ""
 
     def _sync_execution_flags(self) -> None:
         """由逐项目模式和全局跳过参数派生实际可执行能力。"""
@@ -1004,6 +1108,8 @@ def main():
     parser.add_argument("--ack", choices=["success", "failure"], help="AI 步骤结果提交")
     parser.add_argument("--done", action="store_true", help="= --ack success")
     parser.add_argument("--wake", action="store_true", help="从 wait_user 暂停恢复")
+    parser.add_argument("--reload-config", action="store_true",
+                        help="从磁盘重载配置并清除旧项目模式")
     parser.add_argument("--set", action="append", metavar="KEY=VALUE",
                         help="设置状态字段，可多次")
 
@@ -1016,24 +1122,33 @@ def main():
                          ensure_ascii=False, indent=2))
         sys.exit(1)
 
-    if args.init:
-        result = engine.init()
-    elif args.reset:
-        result = engine.reset()
-    elif args.set:
-        result = engine.set_state(args.set)
-    elif args.wake:
-        result = engine.wake()
-    elif args.ack:
-        result = engine.ack(args.ack == "success")
-    elif args.done:
-        result = engine.ack(True)
-    elif args.mode == 0:
-        result = engine.show_status()
-    elif args.mode == 1:
-        result = engine.run()
-    else:
-        result = engine.run()
+    try:
+        if args.init:
+            result = engine.init()
+        elif args.reset:
+            result = engine.reset()
+        elif args.set:
+            result = engine.set_state(args.set)
+        elif args.reload_config:
+            result = engine.reload_config()
+        elif args.wake:
+            result = engine.wake()
+        elif args.ack:
+            result = engine.ack(args.ack == "success")
+        elif args.done:
+            result = engine.ack(True)
+        elif args.mode == 0:
+            result = engine.show_status()
+        elif args.mode == 1:
+            result = engine.run()
+        else:
+            result = engine.run()
+    except ValueError as exc:
+        result = engine._result(
+            "error", str(exc),
+            next_action=(
+                f'{engine.engine_bin} --project "{engine.project_dir}" '
+                '--reload-config'))
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
