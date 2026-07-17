@@ -15,7 +15,7 @@ Issue discovery → Fault classification → CHESHI instrumentation iterations �
 → Serial log analysis → Business code fix → Regression verification → Standardized report
 ```
 
-The workflow definition is centralized in the single file **`flow.yaml`** (a linearly numbered step table). The engine `workflow_engine.py` is a zero-hardcoded pure table-lookup + sequence-jump resolver.
+The workflow definition is centralized in the single file **`flow.yaml`** (a linearly numbered step table). Runtime parameters and workspace paths are centralized in `scripts/skill-config.json`; Python scripts access them through `scripts/path_config.py`.
 
 ## 🎯 Use Cases
 
@@ -25,6 +25,48 @@ The workflow definition is centralized in the single file **`flow.yaml`** (a lin
 | Data parsing errors | Invalid length / offset / CRC checks |
 | State-machine anomalies | Stuck states, incorrect transition logic |
 | Basic peripheral driver issues | Flash / sensor read timeouts |
+
+## Installation
+
+This repository contains one Skill. Use this public source for all installations:
+
+<https://github.com/kzl31/embedded-debug-workflow>
+
+The following commands perform a global, non-interactive installation.
+
+### GitHub Copilot
+
+```powershell
+npx skills add https://github.com/kzl31/embedded-debug-workflow --skill embedded-debug-workflow --agent github-copilot --global --yes
+```
+
+### Claude Code
+
+```powershell
+npx skills add https://github.com/kzl31/embedded-debug-workflow --skill embedded-debug-workflow --agent claude-code --global --yes
+```
+
+### Codex
+
+```powershell
+npx skills add https://github.com/kzl31/embedded-debug-workflow --skill embedded-debug-workflow --agent codex --global --yes
+```
+
+### Cursor
+
+```powershell
+npx skills add https://github.com/kzl31/embedded-debug-workflow --skill embedded-debug-workflow --agent cursor --global --yes
+```
+
+List, update, or remove global Skills:
+
+```powershell
+npx skills list --global
+npx skills update --global --yes
+npx skills remove embedded-debug-workflow --global --yes
+```
+
+Reload the target agent or restart the editor after installation.
 
 ## 📁 Repository Structure
 
@@ -48,6 +90,8 @@ embedded-debug-workflow/
 │   ├── serial_monitor.py  #   Continuous serial monitoring (Python)
 │   ├── batch_build.py     #   Batch operations across projects (Python)
 │   ├── multi_project_runner.py # Per-project build/flash/serial by mode
+│   ├── path_config.py     #   Centralized path and runtime-parameter interface
+│   ├── skill-config.json  #   Single source for paths, defaults, and timeouts
 │   └── workflow_engine.py #   🔑 Workflow engine (table lookup + sequence jump, zero hardcoded steps)
 ├── refs/                  # Detailed specs loaded by AI on demand
 │   ├── core-rules.md      #   Mandatory rules (AI behavior constraints)
@@ -59,15 +103,29 @@ embedded-debug-workflow/
 │   ├── pause-scenarios.md #   Manual pause spec
 │   ├── common-faults.md   #   Common faults quick lookup & JLink/Map analysis
 │   ├── add-flow-guide.md  #   Add step/phase guide (edit flow.yaml)
+│   ├── runtime-config.md  #   Centralized runtime configuration rules
 │   └── workflow-diagram.md#   Full workflow diagram (interactive + sequence)
 ├── templates/             # Templates
 │   ├── checklist.md       #   Iteration checklist (with verification & FAQ)
 │   ├── report.md          #   Fault report template
 │   ├── flow-gate.json     #   State file template (currentSeq, etc.)
 │   └── cheshi_snippet.c   #   CHESHI macro code template
-└── data/                  # Runtime data (auto-generated)
-    └── debug-history.yaml #   Debug history index
+└── data/                  # Skill history index (auto-generated / configuration-controlled)
+  └── debug-history.yaml #   Debug history index
 ```
+
+### Workspace file locations
+
+Workspace configuration, workflow state, build/flash/serial logs, and reports are not
+written into the Skill repository. Their locations are resolved from the `paths` section
+of `scripts/skill-config.json` through `scripts/path_config.py`.
+
+Project logs use unique names such as `build_log_p<index>_<name>.txt`,
+`flash_log_p<index>_<name>.txt`, `debug_log_p<index>_<name>.txt`, and
+`verify_log_p<index>_<name>.txt`.
+
+When changing a directory or filename, edit only `scripts/skill-config.json`.
+Do not duplicate path construction in Python, YAML, or Markdown.
 
 ## 🔧 Requirements
 
@@ -87,7 +145,7 @@ Once the skill is activated, the AI drives the engine in the following pattern (
 
 ```text
 ① New conversation → run engine --init to initialize state, without asking the user
-② If config is missing, generate two project configs with generic defaults under workspace .copilot
+② If config is missing, scan the current VS Code workspace and generate the configuration in the workspace data directory resolved from `skill-config.json`
 ③ Read the actual projects array from config; ask per-project execution mode (build+flash / compile-only / none)
 ④ Run engine --mode 0 to read current state (current seq / phase / todo)
 ⑤ Run engine --mode 1 to execute/advance the current step:
@@ -116,7 +174,7 @@ python scripts/workflow_engine.py --project "<workspace>" --ack success
 python scripts/workflow_engine.py --project "<workspace>" --ack failure
 ```
 
-> Initialization does not scan the workspace; it generates generic defaults for Keil, serial, and debugger. Project paths and actual ports are edited by the user in the config file.
+> Initialization recursively scans the workspace for Keil projects, preserves existing manual parameters, and appends newly discovered projects. The actual configuration path is resolved centrally.
 > All workflow logic (step order, jumps, conditions) lives in `flow.yaml`; the engine merely executes by looking up `seq`.
 
 ### Typical debugging flow
