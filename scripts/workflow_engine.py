@@ -8,13 +8,13 @@ workflow_engine.py — 嵌入式调试工作流「单文件线性序号驱动」
   本引擎         = 纯查表 + 序号跳转解析器（零硬编码步骤）
 
 用法：
-  python workflow_engine.py --project <项目目录> --init
+    python workflow_engine.py --project <VS Code 工作区根目录> --init
       新对话初始化：干净状态 + 阶段置 STARTUP(seq=1) + 生成配置
 
-  python workflow_engine.py --project <项目目录> --mode 0
+    python workflow_engine.py --project <VS Code 工作区根目录> --mode 0
       只读当前状态快照（不执行、不推进）
 
-  python workflow_engine.py --project <项目目录> --mode 1
+    python workflow_engine.py --project <VS Code 工作区根目录> --mode 1
       执行/推进当前步骤：
         - 自动步骤（run_script/check_file/...）引擎直接执行并按结果跳转
         - AI 步骤（ask_user/edit_source/analyze/report/...）输出指令，不推进
@@ -204,8 +204,13 @@ def _default_flow_gate() -> dict:
             "configFound": False,
             "initialQuestionsAnswered": False,
             "sourcePreAnalyzed": False,
+            "sourceQuickReviewed": False,
             "projectCount": 0,
             "projectModes": "",
+            "skipBuild": False,
+            "skipFlash": False,
+            "observeExistingSerial": False,
+            "finishRequested": False,
             "hasBuildProjects": False,
             "hasFlashProjects": False,
             "hasSerialProjects": False,
@@ -257,7 +262,7 @@ class WorkflowEngine:
 
         self.project_dir = os.path.abspath(project_dir)
         if not os.path.isdir(self.project_dir):
-            raise FileNotFoundError(f"项目目录不存在: {self.project_dir}")
+            raise FileNotFoundError(f"VS Code 工作区目录不存在: {self.project_dir}")
 
         # 加载流程定义（flow.yaml）
         self.flow = load_yaml(FLOW_YAML_PATH)
@@ -445,7 +450,7 @@ class WorkflowEngine:
             print(f"[init] ⚠️ 日志/报告目录创建失败: {exc}", file=sys.stderr)
 
         return self._result("initialized",
-            f"✅ 调试工作流已初始化（项目: {self.project_dir}）",
+            f"✅ 调试工作流已初始化（VS Code 工作区: {self.project_dir}）",
             seq=1, phase=self.currentPhase,
             next_action=f'{self.engine_bin} --project "{self.project_dir}" --mode 1')
 
@@ -459,6 +464,15 @@ class WorkflowEngine:
             value = parse_state_value(raw_value)
             if key == "projectInfo.projectModes":
                 self._sync_project_modes(str(value))
+            elif key in {
+                "projectInfo.skipBuild", "projectInfo.skipFlash",
+                "projectInfo.observeExistingSerial", "projectInfo.finishRequested",
+            }:
+                if not isinstance(value, bool):
+                    raise ValueError(f"{key} 必须是 true 或 false")
+                self._apply_update_state({key: value})
+                self._sync_execution_flags()
+                save_flow_gate(self.project_dir, self.fg)
             else:
                 self._apply_update_state({key: value})
             applied[key] = value
@@ -478,10 +492,6 @@ class WorkflowEngine:
 
         project_info = self.fg.setdefault("projectInfo", {})
         project_info["projectModes"] = raw_modes
-        project_info["hasBuildProjects"] = any(mode != "none" for mode in modes)
-        project_info["hasFlashProjects"] = any(
-            mode in {"compile_flash", "full"} for mode in modes)
-        project_info["hasSerialProjects"] = any(mode == "full" for mode in modes)
         project_info["projectRuns"] = [
             {
                 "index": index,
@@ -490,7 +500,34 @@ class WorkflowEngine:
             }
             for index, mode in enumerate(modes)
         ]
+        self._sync_execution_flags()
         save_flow_gate(self.project_dir, self.fg)
+
+    def _sync_execution_flags(self) -> None:
+        """由逐项目模式和全局跳过参数派生实际可执行能力。"""
+        project_info = self.fg.setdefault("projectInfo", {})
+        modes = [
+            item.strip()
+            for item in str(project_info.get("projectModes", "")).split(",")
+            if item.strip()
+        ]
+        skip_build = bool(project_info.get("skipBuild", False))
+        skip_flash = bool(project_info.get("skipFlash", False))
+        observe_existing_serial = bool(
+            project_info.get("observeExistingSerial", False))
+        finish_requested = bool(project_info.get("finishRequested", False))
+        project_info["hasBuildProjects"] = (
+            not skip_build and any(mode != "none" for mode in modes)
+        )
+        project_info["hasFlashProjects"] = (
+            not skip_flash
+            and any(mode in {"compile_flash", "full"} for mode in modes)
+        )
+        project_info["hasSerialProjects"] = (
+            not finish_requested
+            and (observe_existing_serial or (not skip_build and not skip_flash))
+            and any(mode == "full" for mode in modes)
+        )
 
     # ── 驱动循环 ────────────────────────────────────────────────
 
@@ -893,7 +930,10 @@ def main():
   python workflow_engine.py --project "e:\\proj" --reset           # 重置
     python workflow_engine.py --project "e:\\proj" --set projectInfo.projectModes=full,compile_only
         """)
-    parser.add_argument("--project", "-p", required=True, help="项目根目录")
+    parser.add_argument(
+        "--project", "-p", required=True,
+        help="VS Code 工作区根目录（参数名仅为历史兼容；禁止传 Skill 仓库或单个 Keil 工程目录）",
+    )
     parser.add_argument("--init", action="store_true", help="初始化工作流（新对话必须先执行）")
     parser.add_argument("--reset", action="store_true", help="重置为新任务")
     parser.add_argument("--mode", type=int, choices=[0, 1], default=None,

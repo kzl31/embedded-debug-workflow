@@ -35,25 +35,30 @@ argument-hint: '描述故障现象 / 输入 debug help 查看帮助'
 ### 第二步：初始化引擎（发现未初始化时执行）
 
 ```
-python "{{SKILL_DIR}}\scripts\workflow_engine.py" --init --project "<项目根目录>"
+python "{{SKILL_DIR}}\scripts\workflow_engine.py" --init --project "<VS Code 工作区根目录>"
 ```
 
 > `{{SKILL_DIR}}` 为 skill 实际绝对路径，AI 执行时替换（如 `c:\Users\xxxxx\.copilot\skills\embedded-debug-workflow`）。
+> `--project` 是历史兼容参数名，实际必须传入当前 **VS Code 工作区根目录**，不是
+> Skill 仓库目录，也不是配置中某个 Keil 工程的 `projects[*].dir`。例如工作区为
+> `E:\文件\代码\ai\自动化流程`、Skill 项目位于其子目录
+> `embedded-debug-workflow` 时，必须传前者。运行状态和工作区级配置写入
+> `{工作区根目录}/.copilot/`；源码、工程日志和报告目标则依据配置中的实际工程路径确定。
 
 引擎会：创建干净内部状态 → 当前步骤置 `seq=1` → 输出初始化 JSON → 返回 `next_action`。
 
 ### 第三步：运行流程引擎（唯一流程入口）
 
 ```
-python "{{SKILL_DIR}}\scripts\workflow_engine.py" --project "<项目根目录>" --mode 1
+python "{{SKILL_DIR}}\scripts\workflow_engine.py" --project "<VS Code 工作区根目录>" --mode 1
 ```
 
 引擎返回两种状态：
 
 - `status = "awaiting_ai"` → 当前是 **AI 步骤**（问用户 / 改源码 / 分析 / 报告 / 回归）。按 `what` / `params` 执行，完成后提交结果：
   ```
-  python "...workflow_engine.py" --project "<项目根目录>" --ack success   # 目标达成
-  python "...workflow_engine.py" --project "<项目根目录>" --ack failure   # 未达成（走 on_failure 分支）
+  python "...workflow_engine.py" --project "<VS Code 工作区根目录>" --ack success   # 目标达成
+  python "...workflow_engine.py" --project "<VS Code 工作区根目录>" --ack failure   # 未达成（走 on_failure 分支）
   # 等价于 --done = --ack success
   ```
 - `status = "auto_pending"` → 当前是 **自动步骤**（编译/下载/检查文件等），引擎已自动执行并按 `flow.yaml` 的 `on_success` / `on_failure` **链式推进**。AI 无需 `--ack`，直接再跑 `--mode 1` 即可，引擎会持续自动推进直到遇到 `awaiting_ai` / `awaiting_user` / `completed`。

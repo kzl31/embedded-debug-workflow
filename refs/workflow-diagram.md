@@ -41,7 +41,11 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    S2["seq 2：逐项目询问模式<br/>无默认值、无推荐值"] --> Mode{"项目聚合模式"}
+    S2["seq 2：逐项目询问模式<br/>AI 自动判断跳过参数"] --> Skip{"AI 判断执行意图"}
+    Skip -->|两者都跳过| R19["seq 19：回归检查"]
+    Skip -->|skipBuild| D8["seq 8：直接下载已有固件"]
+    Skip -->|skipFlash| Mode{"项目聚合模式（仅编译）"}
+    Skip -->|均不跳过| Mode
     Mode -->|none| D7["seq 7：跳过编译"]
     Mode -->|compile_only| D7
     Mode -->|compile_flash| D7
@@ -59,7 +63,8 @@ flowchart TD
     R20 --> R21["seq 21：完成"]
 ```
 
-> 四种模式必须对 `projects` 中每一个项目分别询问。`none` 不编译不下载，
+> 四种模式必须对 `projects` 中每一个项目分别询问，并分别确认全局参数 `skipBuild`、
+> `skipFlash`。`none` 不编译不下载，
 > `compile_only` 仅编译，`compile_flash` 编译下载但不监听，`full` 编译下载并监听。
 
 ## 3. 整体阶段流转

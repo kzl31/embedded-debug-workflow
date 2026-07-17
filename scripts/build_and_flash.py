@@ -8,6 +8,8 @@
   python scripts/build_and_flash.py                       # 默认工程
   python scripts/build_and_flash.py --project "RU3.uvprojx"
   python scripts/build_and_flash.py --rebuild             # 先 Clean 再编译
+    python scripts/build_and_flash.py --skip-build          # 跳过编译，下载已有固件
+    python scripts/build_and_flash.py --skip-flash          # 只编译，不下载
 """
 
 from __future__ import annotations
@@ -29,6 +31,10 @@ def main() -> None:
     parser.add_argument("--dir", help="工程目录")
     parser.add_argument("--target", help="指定 Target 名称")
     parser.add_argument("--rebuild", action="store_true", help="先 Clean 再编译")
+    parser.add_argument("--skip-build", action="store_true",
+                        help="跳过编译，直接下载已有固件")
+    parser.add_argument("--skip-flash", action="store_true",
+                        help="跳过下载，只执行编译")
     parser.add_argument("--build-log", help="编译日志路径")
     parser.add_argument("--flash-log", help="下载日志路径")
     parser.add_argument("--config-dir", help="配置文件所在目录（默认自动查找）")
@@ -57,52 +63,66 @@ def main() -> None:
         project_dir = project_dir or proj["dir"]
 
     print("=" * 50)
-    print("🔨🔥 一键编译 + 下载")
+    if args.skip_build and args.skip_flash:
+        operation = "跳过编译和下载"
+    elif args.skip_build:
+        operation = "仅下载"
+    elif args.skip_flash:
+        operation = "仅编译"
+    else:
+        operation = "编译 + 下载"
+    print(f"🔨🔥 {operation}")
     print(f"   工程: {project_file}")
     print(f"   目录: {project_dir}")
     print("=" * 50)
 
-    # 步骤 1: 编译
-    print("\n[步骤 1/2] 编译固件...")
-    build_result = build_project(
-        uv4_path=uv4,
-        project_dir=project_dir,
-        project_file=project_file,
-        target=args.target,
-        rebuild=args.rebuild,
-        log_file=args.build_log,
-    )
+    build_result = None
+    if not args.skip_build:
+        print("\n[编译] 编译固件...")
+        build_result = build_project(
+            uv4_path=uv4,
+            project_dir=project_dir,
+            project_file=project_file,
+            target=args.target,
+            rebuild=args.rebuild,
+            log_file=args.build_log,
+        )
 
-    if build_result["status"] == "failure":
-        print("\n❌ 编译失败，终止下载流程")
-        print(f"   错误数: {build_result.get('errors', '?')}")
-        if build_result.get("error_lines"):
-            print("\n   错误信息（前 5 条）:")
-            for line in build_result["error_lines"][:5]:
-                print(f"     {line}")
-        sys.exit(1)
+        if build_result["status"] == "failure":
+            print("\n❌ 编译失败，终止后续流程")
+            print(f"   错误数: {build_result.get('errors', '?')}")
+            if build_result.get("error_lines"):
+                print("\n   错误信息（前 5 条）:")
+                for line in build_result["error_lines"][:5]:
+                    print(f"     {line}")
+            sys.exit(1)
+    else:
+        print("\n[编译] 已按参数跳过，使用现有固件产物")
 
-    # 步骤 2: 下载
-    print("\n[步骤 2/2] 下载固件...")
-    uv4f = find_uv4_flash(config)
-    flash_result = flash_project(
-        uv4_path=uv4f or uv4,
-        project_dir=project_dir,
-        project_file=project_file,
-        log_file=args.flash_log,
-    )
+    flash_result = None
+    if not args.skip_flash:
+        print("\n[下载] 下载固件...")
+        uv4f = find_uv4_flash(config)
+        flash_result = flash_project(
+            uv4_path=uv4f or uv4,
+            project_dir=project_dir,
+            project_file=project_file,
+            log_file=args.flash_log,
+        )
 
-    if flash_result["status"] == "failure":
-        print("\n❌ 下载失败")
-        sys.exit(1)
+        if flash_result["status"] == "failure":
+            print("\n❌ 下载失败")
+            sys.exit(1)
+    else:
+        print("\n[下载] 已按参数跳过")
 
     # 汇总结果
     print("\n" + "=" * 50)
-    print("✅ 编译 + 下载 全部完成")
-    if build_result.get("program_size"):
+    print(f"✅ {operation}完成")
+    if build_result and build_result.get("program_size"):
         ps = build_result["program_size"]
         print(f"   Flash: ~{ps['total_flash']} bytes  RAM: ~{ps['total_ram']} bytes")
-    if flash_result.get("verified"):
+    if flash_result and flash_result.get("verified"):
         print("   ✅ 固件校验通过")
 
 
