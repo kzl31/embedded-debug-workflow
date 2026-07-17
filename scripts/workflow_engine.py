@@ -397,14 +397,6 @@ class WorkflowEngine:
             return self._completed()
         if self._is_auto(step):
             return self._result("error", "当前步骤为自动步骤，无需 --ack；请使用 --mode 1")
-        if ok and step.get("id") == "step_select_project_modes":
-            error = self._validate_confirmed_config_state()
-            if error:
-                return self._result(
-                    "error", error,
-                    next_action=(
-                        f'{self.engine_bin} --project "{self.project_dir}" '
-                        '--reload-config'))
         actions = step.get("on_success") if ok else step.get("on_failure")
         self._run_actions(actions, default_next=True)
         return self._drive()
@@ -582,6 +574,61 @@ class WorkflowEngine:
             config_path=str(path), projects=snapshot,
             required_action="仅针对本次返回的 projects 逐项询问模式")
 
+    def _load_initialized_config(self) -> bool:
+        """读取交互初始化结果并同步到流程状态。"""
+        path = get_config_path(self.project_dir)
+        try:
+            config = load_json(path)
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"[workflow_engine] ❌ 初始化配置读取失败: {exc}", file=sys.stderr)
+            return False
+        errors = validate_config(config)
+        if errors:
+            print(f"[workflow_engine] ❌ 初始化配置校验失败: {'；'.join(errors)}",
+                  file=sys.stderr)
+            return False
+
+        projects = config.get("projects", [])
+        modes = config.get("project_modes", [])
+        valid_modes = {"none", "compile_only", "compile_flash", "full"}
+        if (not isinstance(modes, list) or len(modes) != len(projects)
+                or any(mode not in valid_modes for mode in modes)):
+            print("[workflow_engine] ❌ project_modes 缺失、数量不一致或包含无效模式",
+                  file=sys.stderr)
+            return False
+
+        snapshot = [
+            {
+                "index": index,
+                "name": project.get("name", ""),
+                "dir": project.get("dir", ""),
+                "file": project.get("file", ""),
+                "serial": project.get("serial", {}),
+                "debugger": project.get("debugger", {}),
+            }
+            for index, project in enumerate(projects)
+        ]
+        active_indices = [index for index, mode in enumerate(modes) if mode != "none"]
+        project_info = self.fg.setdefault("projectInfo", {})
+        project_info.update({
+            "configFound": True,
+            "projectCount": len(projects),
+            "currentProjectIndex": active_indices[0] if active_indices else 0,
+            "projectModes": ",".join(modes),
+            "projectRuns": [
+                {"index": index, "mode": mode, "stages": {}}
+                for index, mode in enumerate(modes)
+            ],
+            "configFingerprint": config_fingerprint(config),
+            "configProjects": snapshot,
+            "configConfirmed": True,
+            "initialQuestionsAnswered": True,
+        })
+        self._sync_execution_flags()
+        save_flow_gate(self.project_dir, self.fg)
+        print(f"[workflow_engine] ✅ 已同步 {len(projects)} 个项目模式: {','.join(modes)}")
+        return True
+
     def _sync_project_modes(self, raw_modes: str) -> None:
         """根据逐项目模式生成能力标志和独立运行状态。"""
         snapshot_error = self._config_snapshot_error()
@@ -622,24 +669,6 @@ class WorkflowEngine:
             return "尚未由引擎重新加载配置，请先执行 --reload-config"
         if config_fingerprint(config) != expected:
             return "磁盘配置已修改，旧项目列表失效；请先执行 --reload-config"
-        return ""
-
-    def _validate_confirmed_config_state(self) -> str:
-        """项目模式选择硬门禁：禁止以旧配置或不完整模式推进。"""
-        error = self._config_snapshot_error()
-        if error:
-            return error
-        info = self.fg.get("projectInfo", {})
-        projects = info.get("configProjects", [])
-        modes = [item.strip() for item in str(info.get("projectModes", "")).split(",")
-                 if item.strip()]
-        if not projects or len(modes) != len(projects):
-            return "必须针对引擎最新返回的全部 projects 逐项设置 projectModes"
-        current_index = info.get("currentProjectIndex")
-        if not isinstance(current_index, int) or not 0 <= current_index < len(projects):
-            return "currentProjectIndex 未按最新配置设置或已越界"
-        if info.get("projectCount") != len(projects):
-            return "projectCount 与引擎最新配置快照不一致"
         return ""
 
     def _sync_execution_flags(self) -> None:
@@ -762,7 +791,9 @@ class WorkflowEngine:
             elif atype == "log":
                 self._do_log(aval)
             elif atype == "read_config":
-                pass
+                if not self._load_initialized_config():
+                    self._do_wait("初始化配置或项目模式读取失败，请重新运行初始化。")
+                    return "terminate"
             elif atype == "goto":
                 self._set_next(aval)
                 return "terminate"
@@ -848,9 +879,15 @@ class WorkflowEngine:
         try:
             child_env = os.environ.copy()
             child_env["PYTHONIOENCODING"] = "utf-8"
-            result = subprocess.run(cmd, shell=True, cwd=str(SKILL_DIR),
-                                    timeout=600, env=child_env,
-                                    stdin=subprocess.DEVNULL)
+            interactive = "--interactive" in cmd
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                cwd=str(SKILL_DIR),
+                timeout=600,
+                env=child_env,
+                stdin=None if interactive else subprocess.DEVNULL,
+            )
             self._merge_project_results()
             ok = result.returncode == 0
             print(f"[exec] {'✅' if ok else '❌'} 退出码 {result.returncode}", file=sys.stdout)

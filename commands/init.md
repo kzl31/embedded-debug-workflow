@@ -27,8 +27,8 @@ action: resolve_workspace
 
 ```yaml
 action: run_script
-call: python "{skill_dir}/scripts/config_reader.py" --init "{workspace_dir}"
-说明: 每次都扫描当前工作区中的 .uvprojx/.uvproj；已有配置时保留参数并合并新工程
+call: python "{skill_dir}/scripts/config_reader.py" --init "{workspace_dir}" --interactive
+说明: 每次都扫描当前工作区中的 .uvprojx/.uvproj；已有配置时保留参数并合并新工程，然后使用数字完成配置确认和逐项目模式选择
 ```
 
 运行后脚本会自动执行：
@@ -39,6 +39,9 @@ call: python "{skill_dir}/scripts/config_reader.py" --init "{workspace_dir}"
 5. 已有配置时保留串口、下载器等人工配置，只追加新发现的工程
 6. 新工程的 Keil 路径、串口 256000/8N1、JLink、COM 等属性使用默认值
 7. 若未发现 Keil 工程则停止，并明确告知扫描目录和没有可初始化项目
+8. 数字选择配置版本：`1` 按当前配置进行；`2` 已修改配置，按照最新进行
+9. 对每个项目数字选择执行模式：`1` none；`2` compile_only；`3` compile_flash；`4` full
+10. 将最终 `project_modes` 写入配置，后续流程不再由 AI 重复询问
 
 需要只检查扫描结果而不写配置时，可运行：
 

@@ -3,6 +3,7 @@
 
 核心职责：
     1. `--init <目录>` — 扫描工作区内的 Keil 工程并生成默认配置
+    2. `--interactive` — 使用数字选项确认配置并逐项目选择执行模式
   2. `--read/--validate` — 读取/校验配置
   3. 作为模块导入：load_config(config_dir) / save_config(data, config_dir)
 
@@ -361,6 +362,103 @@ def init_project(workspace_dir: str, project_count: int | None = None) -> dict[s
     return config
 
 
+MODE_OPTIONS = {
+    "1": ("none", "不编译不下载"),
+    "2": ("compile_only", "仅编译"),
+    "3": ("compile_flash", "编译下载"),
+    "4": ("full", "编译下载监听"),
+}
+
+
+def _read_numeric_choice(
+    prompt: str,
+    valid_choices: set[str],
+    input_func=input,
+) -> str:
+    """循环读取严格数字选项，拒绝空值、文字和越界编号。"""
+    while True:
+        try:
+            value = input_func(prompt).strip()
+        except EOFError as exc:
+            raise RuntimeError("交互输入不可用，无法完成初始化选择") from exc
+        if value in valid_choices:
+            return value
+        print(f"❌ 无效选择，请输入: {', '.join(sorted(valid_choices))}")
+
+
+def _print_config_summary(config: dict[str, Any], config_path: Path) -> None:
+    """输出配置摘要，供用户在数字确认前核对。"""
+    print(f"\n配置文件: {config_path}")
+    print(f"Keil: {config.get('keil', {}).get('uv4_path', '')}")
+    print("项目:")
+    for index, project in enumerate(config.get("projects", []), start=1):
+        serial = project.get("serial", {})
+        debugger = project.get("debugger", {})
+        print(
+            f"  {index}. {project.get('name', '')} | "
+            f"{Path(project.get('dir', '')) / project.get('file', '')} | "
+            f"串口={serial.get('port', '')}@{serial.get('baud', '')} | "
+            f"下载器={debugger.get('type', '')}/{debugger.get('com', '')}"
+        )
+
+
+def configure_project_modes(
+    workspace_dir: str | Path,
+    input_func=input,
+) -> dict[str, Any]:
+    """确认配置版本并使用数字选项为每个项目选择运行模式。"""
+    root = Path(workspace_dir).resolve()
+    config_path = get_config_path(root)
+    config = load_config(config_path)
+    if not config:
+        raise FileNotFoundError(f"配置不存在或为空: {config_path}")
+
+    errors = validate_config(config)
+    if errors:
+        raise ValueError("配置校验失败: " + "；".join(errors))
+
+    _print_config_summary(config, config_path)
+    print("\n请选择本次使用的配置:")
+    print("  1. 按当前配置进行")
+    print("  2. 已修改配置，按照最新进行")
+    config_choice = _read_numeric_choice("请输入数字 [1-2]: ", {"1", "2"}, input_func)
+
+    if config_choice == "2":
+        config = load_config(config_path)
+        errors = validate_config(config)
+        if errors:
+            raise ValueError("最新配置校验失败: " + "；".join(errors))
+        print("✅ 已重新读取并校验最新配置")
+        _print_config_summary(config, config_path)
+    else:
+        print("✅ 使用当前配置")
+
+    projects = config.get("projects", [])
+    modes: list[str] = []
+    print("\n请逐项目选择本次执行模式:")
+    for index, project in enumerate(projects, start=1):
+        print(f"\n项目 {index}/{len(projects)}: {project.get('name', '')}")
+        for number, (_, label) in MODE_OPTIONS.items():
+            print(f"  {number}. {label}")
+        selected = _read_numeric_choice("请输入数字 [1-4]: ", set(MODE_OPTIONS), input_func)
+        mode, label = MODE_OPTIONS[selected]
+        modes.append(mode)
+        print(f"✅ 已选择: {label}（{mode}）")
+
+    config["project_modes"] = modes
+    config["config_selection"] = "latest" if config_choice == "2" else "current"
+    config["_configured"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    save_config(config, save_dir=root)
+    print("\n✅ 初始化参数配置完成")
+    print(json.dumps({
+        "status": "configured",
+        "config_selection": config["config_selection"],
+        "project_modes": modes,
+        "projects": [project.get("name", "") for project in projects],
+    }, ensure_ascii=False))
+    return config
+
+
 # ── CLI 入口 ──────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -374,6 +472,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="嵌入式调试配置文件管理器")
     parser.add_argument("--init", metavar="工作区目录",
                         help="启动初始化：扫描工作区并生成 Keil 工程配置")
+    parser.add_argument("--interactive", action="store_true",
+                        help="初始化后使用数字选项确认配置并逐项目选择执行模式")
     parser.add_argument("--scan", metavar="工作区目录",
                         help="只扫描并输出工作区中的 Keil 工程，不修改配置")
     parser.add_argument("--project-count", type=int,
@@ -404,7 +504,9 @@ def main() -> None:
     if args.init:
         try:
             init_project(args.init, args.project_count)
-        except (FileNotFoundError, NotADirectoryError) as exc:
+            if args.interactive:
+                configure_project_modes(args.init)
+        except (FileNotFoundError, NotADirectoryError, RuntimeError, ValueError) as exc:
             print(f"[config_reader] ❌ {exc}", file=sys.stderr)
             sys.exit(1)
         return

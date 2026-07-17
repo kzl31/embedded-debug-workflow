@@ -71,127 +71,37 @@ steps:
   - seq: 1
     id: step_init_config
     phase: STARTUP
-    what: "确保工作区配置存在；首次缺失时扫描当前工作区的 Keil 工程并按实际路径生成配置，其他参数使用默认值"
+    what: "由 Python 完成配置扫描、数字确认和逐项目执行模式选择"
     action: run_script
-    call: 'python scripts/config_reader.py --init "{project_dir}"'
+    call: 'python scripts/config_reader.py --init "{project_dir}" --interactive'
     params:
-      behavior: "与 /kzl 初始化一致：已有配置保留；缺失时扫描 .uvprojx/.uvproj 并填写实际工程路径；其他参数采用默认值"
+      behavior: |
+        Python 脚本独立完成全部初始化参数配置：
+          1. 扫描/合并 Keil 工程并保留已有人工配置；
+          2. 数字选择 1=按当前配置进行、2=已修改配置按照最新进行；
+          3. 对每个项目数字选择 1=none、2=compile_only、3=compile_flash、4=full；
+          4. 将 project_modes 保存到配置文件，引擎 read_config 自动同步全部运行状态。
+        AI 不再使用提问工具确认配置或逐项目模式。
     precheck: []
     pre_action: []
     on_success:
       - read_config: {}
       - update_state:
           projectInfo.configFound: true
-      - goto: step_confirm_config
+      - goto: 2
     on_failure:
       - update_state:
           projectInfo.configFound: false
       - wait_user: "当前工作区未找到 Keil 工程或配置生成失败。请确认工作区包含 .uvprojx/.uvproj 后再继续。"
 
   - seq: 2
-    id: step_confirm_config
-    phase: STARTUP
-    what: "确认本次使用当前配置还是用户已修改的最新配置；必须等待回答"
-    action: ask_user
-    params:
-      template: |
-        本步骤只确认配置版本，禁止询问或设置任何项目模式。
-        1. 首先执行：
-          python scripts/workflow_engine.py --project "{project_dir}" --reload-config
-          只使用本次 JSON 返回的 projects 展示当前配置摘要。
-        2. 使用 VS Code askQuestions 单独询问并必须等待回答：
-          “本次使用哪份配置？”
-          - 按当前配置进行
-          - 已修改配置，按照最新进行
-          两个选项均不设置默认值；允许用户自由补充。
-        3. 若用户选择“已修改配置，按照最新进行”，必须在收到回答后执行：
-          - 再次执行 workflow_engine.py --project "{project_dir}" --reload-config，从
-            {settings.paths.copilot_dir}/{settings.paths.workspace_data_dir}/{settings.paths.config_filename}
-            重新读取、校验并返回最终 projects；
-          - 禁止使用此前读取结果、对话中的旧列表、旧工具结果或 project_count；
-          - 校验失败时仅提示用户修正，修正后再次执行 --reload-config，不得推进；
-          - 校验成功后展示本次返回 projects 的 index、name、dir、file、serial 和 debugger。
-        4. 若选择“按当前配置进行”，保留第 1 次 --reload-config 建立的配置快照。
-        5. 收到明确回答且最终 --reload-config 成功后，执行 --ack success；不得在本步骤设置
-          projectModes、currentProjectIndex 或 configConfirmed。
-    precheck: []
-    pre_action: []
-    on_success:
-      - goto: step_select_project_modes
-    on_failure:
-      - goto: step_confirm_config
-
-  - seq: 3
-    id: step_select_project_modes
-    phase: STARTUP
-    what: "基于最终 reload-config 返回的 projects，逐项目选择本次执行模式"
-    action: ask_user
-    params:
-      template: |
-        本步骤受引擎配置指纹硬门禁约束。只能使用 seq 2 最终 --reload-config 写入状态并返回的
-        configProjects；禁止再次确认配置版本，禁止复用更早的项目列表。
-
-        使用 VS Code askQuestions，一次为 configProjects 中每个项目生成一个单选问题：
-          header: “项目 <index>：<name>”
-          question: “<name> 本次采用哪种执行模式？”
-          options:
-            - 不编译不下载（none）
-            - 仅编译（compile_only）
-            - 编译下载（compile_flash）
-            - 编译下载监听（full）
-          multiSelect: false
-          allowFreeformInput: false
-        四个选项均不设置默认值或推荐值。问题数量和 name 必须来自最新 configProjects；
-        每个项目都必须明确选择，禁止按历史、当前文档或其他项目自动填充。
-
-          skipBuild、skipFlash、observeExistingSerial 和 finishRequested 禁止向用户逐项询问，必须由 AI
-          根据用户开场意图、当前故障阶段和已有证据自动判断：
-            - 正常修改并验证：四项均为 false。
-            - 开始时用户想先看串口，或 AI 判断应先观察板上已有固件：skipBuild=true、
-              skipFlash=true、observeExistingSerial=true、finishRequested=false。
-            - 用户明确要求结束流程，或 AI 判断编译错误暂时无法修复但应完成清理和报告：
-              skipBuild=true、skipFlash=true、observeExistingSerial=false、finishRequested=true。
-            - 仅需下载已有产物：skipBuild=true、skipFlash=false；仅需编译：skipBuild=false、skipFlash=true。
-          AI 应直接设置参数并简短告知判断结果，不得把这些内部控制参数作为问题要求用户选择。
-        若配置未完成，提示用户直接修改该 JSON；修改后必须重新读取并运行
-        --reload-config，校验通过后返回 seq 2 重新确认配置版本，再进入本步骤。
-        只有已针对最终配置完成全部项目模式询问后，才允许依次记录：
-          - --set projectInfo.projectCount=<projects数组实际长度>
-          - --set projectInfo.currentProjectIndex=<当前文档所属项目在 projects 数组中的下标>
-          - --set projectInfo.projectModes=<按项目下标排列的逗号分隔模式，如 compile_only,compile_flash>
-          - --set projectInfo.skipBuild=<true|false>
-          - --set projectInfo.skipFlash=<true|false>
-          - --set projectInfo.observeExistingSerial=<true|false>
-          - --set projectInfo.finishRequested=<true|false>
-          - --set projectInfo.configConfirmed=<true|false>
-          - --ack success 推进。
-        projectCount、currentProjectIndex 和 projectModes 必须全部根据 seq 2 最终配置重新计算；
-        先根据当前文档所属工程确定 currentProjectIndex，无法唯一确定时必须询问用户，禁止
-        默认猜测。若配置刷新前已经设置过这些状态字段，必须用最终配置结果覆盖。
-        projectModes 项数必须与最终 projects 数组长度完全一致。后续编译、下载和串口监听
-        必须逐项目读取 projectModes，并叠加全局跳过参数：none 跳过全部，compile_only 只编译，
-        compile_flash 编译+下载但不监听，full 编译+下载+监听；skipBuild=true 跳过所有编译步骤，
-        skipFlash=true 跳过所有下载步骤；observeExistingSerial=true 时直接监听板上已有固件；
-        finishRequested=true 时优先完成 CHESHI 清理、报告和流程结束，不允许编译失败持续阻塞退出。
-        若配置在 --reload-config 后再次被修改，引擎会拒绝写入 projectModes 或 --ack success，
-        必须重新执行 --reload-config 并重新询问全部项目模式。
-    precheck: []
-    pre_action: []
-    on_success:
-      - update_state:
-          projectInfo.initialQuestionsAnswered: true
-      - goto: step_quick_source_review
-    on_failure:
-      - goto: step_select_project_modes
-
-  - seq: 4
     id: step_quick_source_review
     phase: STARTUP
     what: "快速审查相关源码和历史记忆，形成故障问题模型；本步骤不提问"
     action: analyze
     params:
       template: |
-        1. 根据 seq 2~3 最终确认的项目配置、执行模式和用户开场描述，快速浏览相关源码入口、任务/中断、
+        1. 根据 seq 1 Python 交互初始化最终确认的项目配置、执行模式和用户开场描述，快速浏览相关源码入口、任务/中断、
           通信接口、关键状态变量、最近可能涉及的变更点以及已有日志输出路径。
         2. 读取 data/debug-history.yaml，检查相似历史案例。
         3. 形成简短审查记录：涉及文件/模块、调用或数据流入口、可疑变更点、需要验证的假设、
@@ -203,11 +113,11 @@ steps:
           projectInfo.memoryChecked: true
           projectInfo.sourcePreAnalyzed: true
           projectInfo.sourceQuickReviewed: true
-      - goto: step_collect_fault_details
+      - goto: 3
     on_failure:
-      - goto: step_quick_source_review
+      - goto: 2
 
-  - seq: 5
+  - seq: 3
     id: step_collect_fault_details
     phase: STARTUP
     what: "使用明确选项追问故障信息，并最后单独询问补充内容"
@@ -232,7 +142,7 @@ steps:
         5. 追问结束时，必须额外单独询问一个问题：请问还有什么补充？ 【无】和自由回答
           该问题不计入上述任一轮的问题数，但必须等待用户回答。
         
-        可结合 seq 4 审查结果在各问题说明中补充具体上下文，但不得改变上述选项类别。
+        可结合 seq 2 审查结果在各问题说明中补充具体上下文，但不得改变上述选项类别。
         完成两次询问并收到全部回答后执行 --ack success；信息矛盾且无法继续时执行 --ack failure。
       note: |
         本步不得重复询问配置和项目模式。影响项目选项必须来自最新 configProjects。
@@ -245,11 +155,11 @@ steps:
       - log:
           level: info
           msg: "参数已确认，进入调试流程"
-      - goto: step_to_debug
+      - goto: 4
     on_failure:
-      - goto: step_collect_fault_details
+      - goto: 3
 
-  - seq: 6
+  - seq: 4
     id: step_to_debug
     phase: STARTUP
     what: "STARTUP 阶段完成，进入调试循环"
@@ -262,16 +172,16 @@ steps:
           - log:
               level: info
               msg: "首次进入调试流程，允许在无源码修改情况下执行一次基线编译/下载/监听"
-          - goto: step_compile
+          - goto: 7
         else:
-          - goto: step_analyze
+          - goto: 5
     on_failure:
-      - goto: step_analyze
+      - goto: 5
 
   # ============================================================
   # DEBUG_LOOP 阶段
   # ============================================================
-  - seq: 7
+  - seq: 5
     id: step_analyze
     phase: DEBUG_LOOP
     what: "仅定位可疑代码位置（不是根因裁决点，严禁在此汇报/询问）"
@@ -299,20 +209,20 @@ steps:
           - log:
               level: info
               msg: "本轮只观察板上已有固件，跳过 CHESHI 注入"
-          - goto: 9
+          - goto: 7
         else:
           - when: 'projectInfo.hasSerialProjects == true'
             then:
-              - goto: 8
+              - goto: 6
             else:
               - log:
                   level: info
                   msg: "没有需要新固件串口验证的项目，跳过插入 CHESHI 调试打印"
-              - goto: 9
+              - goto: 7
     on_failure:
-      - goto: 7
+      - goto: 5
 
-  - seq: 8
+  - seq: 6
     id: step_add_cheshi
     phase: DEBUG_LOOP
     what: "仅对 mode=full 的项目在可疑位置补充充分的 CHESHI 调试观测；允许为采集信息适当修改代码，严禁停下"
@@ -352,7 +262,7 @@ steps:
       关闭 CHESHI 后必须可独立编译且无行为变化。
       只有实际代码差异与上述状态一致后才 --ack success。若没有修改，也必须如实设置 reused/unchanged；
       引擎将跳过编译、下载和串口监听，不得把“没有修改”包装成新的加打印轮次。
-      注：若因 seq 9 编译失败回到本步，此时应修复编译错误（而非纠结插打印）。
+      注：若因 seq 7 编译失败回到本步，此时应修复编译错误（而非纠结插打印）。
     precheck: []
     pre_action: []
     on_success:
@@ -360,20 +270,20 @@ steps:
         then:
           - update_state:
               debugLoopInfo.cheshiAdded: true
-          - goto: 9
+          - goto: 7
         else:
           - when: 'debugLoopInfo.iterationNewEvidence == true'
             then:
               - log:
                   level: info
                   msg: "本轮无源码修改但已有新证据，跳过编译下载监听，直接分析"
-              - goto: 12
+              - goto: 10
             else:
               - wait_user: "本轮未产生新的有效源码修改，也没有新的运行证据；为防止空转，流程已暂停。请提供新排查方向，或允许设计新的 CHESHI 观测点后恢复。"
     on_failure:
-      - goto: 8
+      - goto: 6
 
-  - seq: 9
+  - seq: 7
     id: step_compile
     phase: DEBUG_LOOP
     what: "编译固件"
@@ -384,7 +294,7 @@ steps:
         on_fail:
           - when: 'projectInfo.finishRequested == true'
             then:
-              - goto: 19
+              - goto: 17
             else:
               - wait_user: "调试循环中未检测到本轮有效源码修改，已阻止编译、下载和监听。请新增有效观测代码或提供新证据。"
       - assert: 'projectInfo.hasBuildProjects == true'
@@ -394,23 +304,23 @@ steps:
               - log:
                   level: info
                   msg: "已请求结束流程，跳过编译并进入临时代码清理"
-              - goto: 19
+              - goto: 17
             else:
               - when: 'projectInfo.observeExistingSerial == true'
                 then:
                   - log:
                       level: info
                       msg: "跳过编译下载，直接观察板上已有固件串口"
-                  - goto: 11
+                  - goto: 9
                 else:
                   - when: 'projectInfo.hasFlashProjects == true'
                     then:
                       - log:
                           level: info
                           msg: "已跳过编译，直接下载已有固件"
-                      - goto: 10
+                      - goto: 8
                     else:
-                      - goto: 21
+                      - goto: 19
       - assert: "debugLoopInfo.compileRetryCount < 5"
         on_fail:
           - log:
@@ -429,15 +339,15 @@ steps:
           debugLoopInfo.baselineBuildPending: false
       - when: 'projectInfo.hasFlashProjects == true'
         then:
-          - goto: 10
+          - goto: 8
         else:
-          - goto: 21
+          - goto: 19
     on_failure:
       - update_state:
           debugLoopInfo.lastBuildStatus: "failure"
       - when: 'projectInfo.finishRequested == true'
         then:
-          - goto: 19
+          - goto: 17
         else:
           - when: "debugLoopInfo.compileRetryCount >= 5"
             then:
@@ -451,9 +361,9 @@ steps:
               - log:
                   level: warning
                   msg: "编译失败，修正后返回加打印"
-              - goto: 8
+              - goto: 6
 
-  - seq: 10
+  - seq: 8
     id: step_flash
     phase: DEBUG_LOOP
     what: "下载固件到目标板"
@@ -465,7 +375,7 @@ steps:
           - wait_user: "当前轮没有成功的新构建产物，已阻止下载。请先完成允许的基线编译或有效修改后的编译。"
       - assert: 'projectInfo.hasFlashProjects == true'
         on_fail:
-          - goto: 21
+          - goto: 19
       - assert: "debugLoopInfo.retryCount < 2"
         on_fail:
           - log:
@@ -483,9 +393,9 @@ steps:
           debugLoopInfo.retryCount: 0
       - when: 'projectInfo.hasSerialProjects == true'
         then:
-          - goto: 11
+          - goto: 9
         else:
-          - goto: 21
+          - goto: 19
     on_failure:
       - update_state:
           debugLoopInfo.lastFlashStatus: "failure"
@@ -498,9 +408,9 @@ steps:
               debugLoopInfo.retryCount: 0
           - wait_user: "连续2次下载失败。请调整目标板、下载器或连接，确认后恢复流程，流程将从本下载步骤重试。"
         else:
-          - goto: 10
+          - goto: 8
 
-  - seq: 11
+  - seq: 9
     id: step_capture_log
     phase: DEBUG_LOOP
     what: "等待10秒后启动串口监听，捕获日志（仅编译下载监听模式会到达本步）"
@@ -521,7 +431,7 @@ steps:
       - update_state:
           debugLoopInfo.iterationNewEvidence: true
           debugLoopInfo.iterationExecutionAllowed: false
-      - goto: 12
+      - goto: 10
     on_failure:
       - update_state:
           debugLoopInfo.lastSerialStatus: "failure"
@@ -530,7 +440,7 @@ steps:
           msg: "串口监听失败，流程已暂停"
       - wait_user: "串口监听失败，流程已暂停；确认串口恢复后可继续"
 
-  - seq: 12
+  - seq: 10
     id: step_analyze_result
     phase: DEBUG_LOOP
     what: "分析日志是否足以定位根因"
@@ -556,7 +466,7 @@ steps:
           debugLoopInfo.rootCauseFound: true
           debugLoopInfo.iterationExhausted: false
           debugLoopInfo.nextObservationPlanned: false
-      - goto: 14            # 跳过追问环节，直接进入验证阶段
+      - goto: 12            # 跳过追问环节，直接进入验证阶段
     on_failure:
       - when: "debugLoopInfo.askUser == true"
         then:
@@ -573,7 +483,7 @@ steps:
               - log:
                   level: warning
                   msg: "AI 没信心，进入追问环节"
-              - goto: 13           # 追问用户
+              - goto: 11           # 追问用户
         else:
           - when: 'debugLoopInfo.nextObservationPlanned == false'
             then:
@@ -586,7 +496,7 @@ steps:
                       msg: "连续 8 轮有效迭代未定位根因，转入临时调试代码清理与未解决报告流程"
                   - update_state:
                       debugLoopInfo.iterationExhausted: true
-                  - goto: 19
+                  - goto: 17
                 else:
                   - update_state:
                       debugLoopInfo.iterationCount: "+1"
@@ -597,9 +507,9 @@ steps:
                       debugLoopInfo.iterationExecutionAllowed: false
                       debugLoopInfo.iterationNewEvidence: false
                       debugLoopInfo.nextObservationPlanned: false
-                  - goto: 8            # 返回加打印，继续有效迭代
+                  - goto: 6            # 返回加打印，继续有效迭代
 
-  - seq: 13
+  - seq: 11
     id: step_ask_clarify
     phase: DEBUG_LOOP
     what: "向用户追问以厘清根因方向（AI 没信心时进入）"
@@ -618,14 +528,14 @@ steps:
     precheck: []
     pre_action: []
     on_success:
-      - goto: 12            # 回到分析，结合新信息重新判断
+      - goto: 10            # 回到分析，结合新信息重新判断
     on_failure:
-      - goto: 12
+      - goto: 10
 
   # ============================================================
   # VERIFY_AND_REPORT 阶段
   # ============================================================
-  - seq: 14
+  - seq: 12
     id: step_fix_code
     phase: VERIFY_AND_REPORT
     what: "根据根因分析结果修改业务代码，并加入可证伪的临时验证观测"
@@ -641,15 +551,15 @@ steps:
         这些检测代码与打印同样必须全部使用 CHESHI 包裹；通信层只记录快照/事件，
         不得直接 printf 或阻塞通信，最终由 main 主循环统一输出。
         若修复需要调整时序，必须先记录原时序基线，再验证关键间隔、超时和队列行为未被破坏。
-        seq 15~18 必须基于这些观测结果判断，不能仅以编译、下载成功作为修复成功依据。
+        seq 13~16 必须基于这些观测结果判断，不能仅以编译、下载成功作为修复成功依据。
     precheck: []
     pre_action: []
     on_success:
-      - goto: 15
+      - goto: 13
     on_failure:
-      - goto: 14
+      - goto: 12
 
-  - seq: 15
+  - seq: 13
     id: step_verify_build
     phase: VERIFY_AND_REPORT
     what: "逐项目编译修复后的固件（mode=none 的项目跳过）"
@@ -663,16 +573,16 @@ steps:
               - log:
                   level: info
                   msg: "已请求结束流程，跳过验证编译并进入临时代码清理"
-              - goto: 19
+              - goto: 17
             else:
               - when: 'projectInfo.hasFlashProjects == true'
                 then:
                   - log:
                       level: info
                       msg: "验证阶段已跳过编译，直接下载已有固件"
-                  - goto: 16
+                  - goto: 14
                 else:
-                  - goto: 18
+                  - goto: 16
       - assert: "debugLoopInfo.compileRetryCount < 5"
         on_fail:
           - log:
@@ -689,16 +599,16 @@ steps:
           debugLoopInfo.compileRetryCount: 0
       - when: 'projectInfo.hasFlashProjects == true'
         then:
-          - goto: 16
+          - goto: 14
         else:
-          - goto: 18
+          - goto: 16
     on_failure:
       - update_state:
           debugLoopInfo.iterationCount: "+1"
           debugLoopInfo.loopReason: "修复后的固件编译未通过，返回定位并修正"
       - when: 'projectInfo.finishRequested == true'
         then:
-          - goto: 19
+          - goto: 17
         else:
           - when: "debugLoopInfo.compileRetryCount >= 5"
             then:
@@ -709,9 +619,9 @@ steps:
                   debugLoopInfo.compileRetryCount: 0
               - wait_user: "修复后的固件连续5次编译失败。请调整源码或编译环境，确认后恢复流程，流程将从本编译步骤重试。"
             else:
-              - goto: 7
+              - goto: 5
 
-  - seq: 16
+  - seq: 14
     id: step_verify_flash
     phase: VERIFY_AND_REPORT
     what: "逐项目下载修复后的固件（仅 compile_flash/full 项目执行）"
@@ -720,7 +630,7 @@ steps:
     precheck:
       - assert: 'projectInfo.hasFlashProjects == true'
         on_fail:
-          - goto: 18
+          - goto: 16
     pre_action: []
     on_success:
       - when: 'projectInfo.hasSerialProjects == true'
@@ -728,16 +638,16 @@ steps:
           - log:
               level: info
               msg: "full 模式项目下载成功，开始串口验证"
-          - goto: 17
+          - goto: 15
         else:
-          - goto: 18
+          - goto: 16
     on_failure:
       - log:
           level: error
           msg: "修复固件下载失败，流程暂停；调整后将重新下载"
       - wait_user: "修复固件下载失败。请调整目标板、下载器或连接，确认后恢复流程，流程将从本下载步骤重试。"
 
-  - seq: 17
+  - seq: 15
     id: step_verify_capture_log
     phase: VERIFY_AND_REPORT
     what: "等待10秒后持续读取串口并保存修复验证日志，确认运行期间没有复现问题"
@@ -746,7 +656,7 @@ steps:
     precheck: []
     pre_action: []
     on_success:
-      - goto: 18
+      - goto: 16
     on_failure:
       - update_state:
           debugLoopInfo.lastSerialStatus: "failure"
@@ -755,7 +665,7 @@ steps:
           msg: "修复验证阶段串口监听失败，流程已暂停"
       - wait_user: "串口监听失败，流程已暂停；确认串口恢复后可继续"
 
-  - seq: 18
+  - seq: 16
     id: step_confirm_fix
     phase: VERIFY_AND_REPORT
     what: "分析验证日志，确认修复检测条件成立、原故障未复现且没有新增异常"
@@ -774,15 +684,15 @@ steps:
     on_success:
       - update_state:
           verifyReport.fixConfirmed: true
-      - goto: 19
+      - goto: 17
     on_failure:
       - update_state:
           verifyReport.fixConfirmed: false
           debugLoopInfo.iterationCount: "+1"
           debugLoopInfo.loopReason: "验证证据不足或故障仍然存在，返回调试循环"
-      - goto: 7
+      - goto: 5
 
-  - seq: 19
+  - seq: 17
     id: step_clean_cheshi
     phase: VERIFY_AND_REPORT
     what: "流程退出前删除本次新增的全部 CHESHI 临时调试代码；无论故障已解决或迭代耗尽均须清理"
@@ -800,11 +710,11 @@ steps:
     on_success:
       - update_state:
           verifyReport.cheshiCleaned: true
-      - goto: 20
+      - goto: 18
     on_failure:
-      - goto: 19
+      - goto: 17
 
-  - seq: 20
+  - seq: 18
     id: step_clean_build
     phase: VERIFY_AND_REPORT
     what: "清理 CHESHI 后重新编译，确认正式源码仍可通过编译"
@@ -815,34 +725,34 @@ steps:
         on_fail:
           - when: 'projectInfo.finishRequested == true'
             then:
-              - goto: 22
+              - goto: 20
             else:
               - when: "debugLoopInfo.iterationExhausted == true"
                 then:
-                  - goto: 22
+                  - goto: 20
                 else:
-                  - goto: 21
+                  - goto: 19
     pre_action: []
     on_success:
       - when: "debugLoopInfo.iterationExhausted == true"
         then:
-          - goto: 22
+          - goto: 20
         else:
-          - goto: 21
+          - goto: 19
     on_failure:
       - when: 'projectInfo.finishRequested == true'
         then:
           - log:
               level: warning
               msg: "结束流程时清理后编译仍失败；记录为未验证并继续生成报告"
-          - goto: 22
+          - goto: 20
         else:
           - log:
               level: error
               msg: "清理 CHESHI 后编译失败，流程暂停；调整后将重新编译"
           - wait_user: "清理 CHESHI 后编译失败。请调整源码或编译环境，确认后恢复流程，流程将从本编译步骤重试。"
 
-  - seq: 21
+  - seq: 19
     id: step_regression
     phase: VERIFY_AND_REPORT
     what: "确认修复未引入新问题，其他功能模块正常"
@@ -862,14 +772,14 @@ steps:
     precheck: []
     pre_action: []
     on_success:
-      - goto: 22
+      - goto: 20
     on_failure:
       - update_state:
           debugLoopInfo.iterationCount: "+1"
           debugLoopInfo.loopReason: "回归检查未通过，返回调试循环继续排查"
-      - goto: 7
+      - goto: 5
 
-  - seq: 22
+  - seq: 20
     id: step_report
     phase: VERIFY_AND_REPORT
     what: "生成包含完整证据链的详细报告，并写入项目索引和持久记忆"
@@ -929,11 +839,11 @@ steps:
           debugSession.reportFile: "{report_path}"
           debugSession.memorySaved: true
           debugSession.endTime: "{now}"
-      - goto: 23
+      - goto: 21
     on_failure:
-      - goto: 22
+      - goto: 20
 
-  - seq: 23
+  - seq: 21
     id: step_complete
     phase: VERIFY_AND_REPORT
     what: "标记全部流程完成"
@@ -941,6 +851,6 @@ steps:
     precheck: []
     pre_action: []
     on_success:
-      - goto: done
+      - exit: COMPLETED
     on_failure:
-      - goto: done
+      - exit: COMPLETED
