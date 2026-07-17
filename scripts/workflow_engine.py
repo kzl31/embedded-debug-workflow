@@ -153,6 +153,23 @@ def get_project_results_path(project_dir: str) -> Path:
     return Path(project_dir) / STATE_DIR / PROJECT_RESULTS_FILENAME
 
 
+def get_config_path(project_dir: str) -> Path:
+    return Path(project_dir) / ".copilot" / "embedded-debug-config.json"
+
+
+def load_progress_display_enabled(project_dir: str) -> bool:
+    """读取工作区进度展示开关；缺失或配置异常时保持兼容并默认开启。"""
+    path = get_config_path(project_dir)
+    if not path.is_file():
+        return True
+    try:
+        config = load_json(path)
+    except (json.JSONDecodeError, OSError):
+        return True
+    value = config.get("ai_progress_display", True)
+    return value if isinstance(value, bool) else True
+
+
 def load_flow_gate(project_dir: str) -> dict:
     path = get_flow_gate_path(project_dir)
     if path.exists():
@@ -283,6 +300,8 @@ class WorkflowEngine:
         pause_state = self.fg.get("pauseState", {})
         self.waiting: bool = bool(pause_state.get("waiting", False))
         self.wait_msg: str = str(pause_state.get("reason", "") or "")
+        self.progress_display_enabled = load_progress_display_enabled(self.project_dir)
+        self.displayed_seqs: set[int] = set()
 
         self.engine_bin = f'python "{Path(__file__).resolve()}"'
 
@@ -560,6 +579,7 @@ class WorkflowEngine:
     # ── 自动步骤执行 ────────────────────────────────────────────
 
     def _execute_auto(self, step: dict) -> None:
+        self._emit_progress(step)
         action = step.get("action")
 
         # 1) 前置断言
@@ -779,15 +799,28 @@ class WorkflowEngine:
         result["next_action"] = (
             f'{self.engine_bin} --project "{self.project_dir}" --ack success'
             f'   （若未达成目标用 --ack failure）')
-        result["user_display"] = self._user_display(step)
+        if self.progress_display_enabled:
+            result["user_display"] = self._user_display(step)
         return result
 
+    def _emit_progress(self, step: dict) -> None:
+        """为每个步骤生成一次可展示进度；关闭开关时不要求 AI 输出。"""
+        seq = step.get("seq")
+        if not isinstance(seq, int) or seq in self.displayed_seqs:
+            return
+        self.displayed_seqs.add(seq)
+        if self.progress_display_enabled:
+            print(json.dumps({"user_display": self._user_display(step)},
+                             ensure_ascii=False), file=sys.stdout)
+
     def _user_display(self, step: dict) -> dict:
-        """生成简短进度展示；仅告知正在做什么，不构成分析或结果汇报，使用'> 内容描述'告知用户。"""
+        """生成简短进度展示；仅告知正在做什么，不构成分析或结果汇报。"""
+        current_step = f'步骤 {step.get("seq")}/{len(self.steps)}：{step.get("what", "")}'
         display = {
             "type": "progress_only",
-            "current_step": f'步骤 {step.get("seq")}/{len(self.steps)}：{step.get("what", "")}',
-            "instruction": "向用户简述当前步骤；不要展开分析、结论或报告内容，使用'> 内容描述'告知用户。",
+            "current_step": current_step,
+            "text": f'> {current_step}',
+            "instruction": "仅展示 text 字段；不得展开分析、日志、根因、结论或报告内容。",
         }
         iteration = int(self._get_path("debugLoopInfo.iterationCount") or 0)
         if step.get("phase") == "DEBUG_LOOP":
@@ -798,6 +831,9 @@ class WorkflowEngine:
                 "reason": reason,
                 "text": f"调试循环第 {loop_count} 轮：{reason}",
             }
+            display["text"] = (
+                f'> 调试循环第 {loop_count} 轮：{reason}；{current_step}'
+            )
         return display
 
     # ── 终止状态 ────────────────────────────────────────────────

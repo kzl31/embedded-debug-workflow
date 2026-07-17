@@ -7,11 +7,15 @@
 > `--project` 参数名，但参数值必须是当前 VS Code 工作区根目录；不得因为 Skill 仓库是
 > 工作区中的一个子目录，就将该子目录作为运行目录。各 Keil 工程目录只记录在
 > `projects[*].dir` 中，由后续脚本按目标工程读取。
+> 配置、流程状态、报告和日志均位于 `{工作区}/.copilot/`。每个工程的日志使用独立名称：
+> `build_log_p<下标>_<项目名>.txt`、`flash_log_p<下标>_<项目名>.txt`、
+> `debug_log_p<下标>_<项目名>.txt` 和 `verify_log_p<下标>_<项目名>.txt`。
 > 配置文件为 JSON 格式（不使用空格/竖线对齐的文本表，避免歧义）。每个工程独立携带自己的串口与下载器，从而建立「工程文件路径 ↔ 串口 ↔ 下载器」的一一对应关系。
 
 ```json
 {
   "_generated": "2026-07-08 23:44:00",
+  "ai_progress_display": true,
   "keil": { "uv4_path": "C:\\Keil_v5\\UV4\\UV4.exe" },
   "projects": [
     {
@@ -31,6 +35,13 @@
   ]
 }
 ```
+
+`ai_progress_display` 控制 AI 是否向用户展示流程进度：
+
+- `true`（默认）：每个实际到达的流程步骤至少展示一次，引擎提供可直接输出的
+  `user_display.text`，AI 只能原样展示，不能扩写分析或结论。
+- `false`：引擎不返回 `user_display`，AI 不输出流程进度；正常提问、人工暂停和最终结果不受影响。
+- 该字段必须是 JSON 布尔值 `true` / `false`，不能写成字符串。
 
 > 下载器以串口号（`com`）标识，而非序列号。
 > `/kzl 初始化` 默认使用当前 VS Code 工作区根目录，并递归扫描 `.uvprojx` / `.uvproj`；

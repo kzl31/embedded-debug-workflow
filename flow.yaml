@@ -394,7 +394,7 @@ steps:
     phase: DEBUG_LOOP
     what: "等待10秒后启动串口监听，捕获日志（仅编译下载监听模式会到达本步）"
     action: run_script
-    call: 'python scripts/multi_project_runner.py --action serial --stage debug_serial_{debugLoopInfo.iterationCount} --config-dir "{project_dir}" --modes {projectInfo.projectModes} --delay 10 --duration 30 --save "{project_dir}/.copilot/logs/debug_log.txt"'
+    call: 'python scripts/multi_project_runner.py --action serial --stage debug_serial_{debugLoopInfo.iterationCount} --config-dir "{project_dir}" --modes {projectInfo.projectModes} --delay 10 --duration 30 --save "debug_log.txt"'
     precheck: []
     pre_action: []
     on_success:
@@ -604,7 +604,7 @@ steps:
     phase: VERIFY_AND_REPORT
     what: "等待10秒后持续读取串口并保存修复验证日志，确认运行期间没有复现问题"
     action: run_script
-    call: 'python scripts/multi_project_runner.py --action serial --stage verify_serial_{debugLoopInfo.iterationCount} --config-dir "{project_dir}" --modes {projectInfo.projectModes} --delay 10 --duration 30 --save "{project_dir}/.copilot/logs/verify_log.txt"'
+    call: 'python scripts/multi_project_runner.py --action serial --stage verify_serial_{debugLoopInfo.iterationCount} --config-dir "{project_dir}" --modes {projectInfo.projectModes} --delay 10 --duration 30 --save "verify_log.txt"'
     precheck: []
     pre_action: []
     on_success:
@@ -624,7 +624,7 @@ steps:
     action: analyze
     params:
       mode: verify_fix
-      log: "{project_dir}/.copilot/logs/verify_log.txt"
+      log_pattern: "{project_dir}/.copilot/logs/verify_log_p*_<项目名>.txt"
       note: |
         mode=full 的项目必须分别读取其验证日志，确认观测窗口内修复检测条件成立、
         原故障未复现、CHESHI 观测值符合预期且无新增错误，才能 --ack success 推进。
@@ -713,7 +713,7 @@ steps:
         - "串口参数与配置一致：监听端口/波特率取自对应工程的 serial"
         - "编译输出 0 Error、无阻塞性 Warning"
         - "固件下载成功：日志出现 Flash Load finished / Verify OK"
-        - "验证日志已保存到 {项目目录}/.copilot/logs/verify_log.txt"
+        - "每个项目的验证日志已分别保存到 {工作区}/.copilot/logs/verify_log_p<下标>_<项目名>.txt"
         - "调试打印信息充分，可支撑故障定位"
         - "业务修改仅影响目标模块，无连锁副作用（长度/偏移/缓冲区边界已复核）"
         - "原故障现象消失，其它模块（通信/定时器/中断/外设）正常"

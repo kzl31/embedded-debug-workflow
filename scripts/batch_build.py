@@ -17,7 +17,7 @@ from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPT_DIR))
-from config_reader import load_config, get_keil_path, get_projects
+from config_reader import get_keil_path, get_projects, load_config, project_log_path
 from keil_build import build_project
 from keil_flash import flash_project
 
@@ -44,23 +44,24 @@ def main() -> None:
         sys.exit(1)
 
     # 筛选工程
+    selected_projects = list(enumerate(projects))
     if args.index is not None:
         if args.index < 0 or args.index >= len(projects):
             print(f"❌ 索引 {args.index} 超出范围，有效 0~{len(projects) - 1}")
             sys.exit(1)
-        projects = [projects[args.index]]
+        selected_projects = [(args.index, projects[args.index])]
 
-    print(f"📋 共 {len(projects)} 个工程待处理")
+    print(f"📋 共 {len(selected_projects)} 个工程待处理")
     print("=" * 50)
 
     all_success = True
 
-    for i, proj in enumerate(projects):
-        name = proj.get("name", f"工程{i}")
+    for display_index, (project_index, proj) in enumerate(selected_projects):
+        name = proj.get("name", f"工程{project_index}")
         proj_dir = proj["dir"]
         proj_file = proj["file"]
 
-        print(f"\n[{i + 1}/{len(projects)}] {name}")
+        print(f"\n[{display_index + 1}/{len(selected_projects)}] {name}")
         print(f"   目录: {proj_dir}")
         print(f"   文件: {proj_file}")
 
@@ -72,6 +73,9 @@ def main() -> None:
                 project_dir=proj_dir,
                 project_file=proj_file,
                 target=args.target,
+                log_file=str(project_log_path(
+                    args.config_dir, config, project_index, name, "build_log"
+                )),
             )
             if build_result["status"] == "failure":
                 print(f"   ❌ 编译失败")
@@ -86,6 +90,9 @@ def main() -> None:
                 uv4_path=uv4,
                 project_dir=proj_dir,
                 project_file=proj_file,
+                log_file=str(project_log_path(
+                    args.config_dir, config, project_index, name, "flash_log"
+                )),
             )
             if flash_result["status"] == "failure":
                 print(f"   ❌ 下载失败")
@@ -93,7 +100,7 @@ def main() -> None:
                 continue
             print(f"   ✅ 下载成功")
 
-        print(f"   ✅ [{i + 1}/{len(projects)}] {name} 完成")
+        print(f"   ✅ [{display_index + 1}/{len(selected_projects)}] {name} 完成")
 
     print("\n" + "=" * 50)
     if all_success:

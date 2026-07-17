@@ -13,7 +13,14 @@ from pathlib import Path
 _SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPT_DIR))
 
-from config_reader import get_keil_path, get_projects, get_serial_config, load_config
+from config_reader import (
+    get_keil_path,
+    get_projects,
+    get_serial_config,
+    load_config,
+    project_log_path,
+    resolve_workspace_dir,
+)
 from keil_build import build_project, find_uv4
 from keil_flash import flash_project
 from serial_monitor import monitor_serial
@@ -42,12 +49,20 @@ def selected_indices(action: str, modes: list[str]) -> list[int]:
     return [i for i, mode in enumerate(modes) if mode == "full"]
 
 
-def project_log_path(base: str | None, index: int, name: str) -> str | None:
-    if not base:
-        return None
-    path = Path(base)
-    safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
-    return str(path.with_name(f"{path.stem}_p{index}_{safe_name}{path.suffix}"))
+def serial_log_path(
+    base: str | None,
+    config_dir: str,
+    config: dict,
+    index: int,
+    name: str,
+) -> str:
+    """生成项目独立串口日志；``base`` 只提供日志类型和扩展名。"""
+    base_path = Path(base) if base else Path("serial_log.txt")
+    log_type = base_path.stem or "serial_log"
+    suffix = base_path.suffix or ".txt"
+    return str(project_log_path(
+        config_dir, config, index, name, log_type, suffix
+    ))
 
 
 def write_project_results(
@@ -57,12 +72,8 @@ def write_project_results(
     results: list[dict],
 ) -> Path:
     """原子写出本次逐项目执行结果，供工作流引擎合并。"""
-    config_path = Path(config_dir).resolve()
-    workspace = (
-        config_path if config_path.is_dir()
-        else (config_path.parent.parent if config_path.parent.name == ".copilot"
-              else config_path.parent)
-    )
+    config = load_config(config_dir)
+    workspace = resolve_workspace_dir(config_dir, config)
     result_path = workspace / ".copilot" / ".54188" / "project-results.json"
     result_path.parent.mkdir(parents=True, exist_ok=True)
     payload: dict = {"stages": {}}
@@ -93,12 +104,8 @@ def write_project_results(
 
 def successful_indices(config_dir: str, stage: str) -> set[int]:
     """读取同一阶段已成功的项目下标，用于失败重试时只执行失败项目。"""
-    config_path = Path(config_dir).resolve()
-    workspace = (
-        config_path if config_path.is_dir()
-        else (config_path.parent.parent if config_path.parent.name == ".copilot"
-              else config_path.parent)
-    )
+    config = load_config(config_dir)
+    workspace = resolve_workspace_dir(config_dir, config)
     result_path = workspace / ".copilot" / ".54188" / "project-results.json"
     if not result_path.is_file():
         return set()
@@ -183,14 +190,20 @@ def main() -> None:
                     "status": "failure", "summary": summary,
                 })
                 continue
+            log_path = str(project_log_path(
+                args.config_dir, config, index, name,
+                "build_log" if args.action == "build" else "flash_log",
+            ))
             result = (
-                build_project(uv4, project_dir, project_file)
+                build_project(uv4, project_dir, project_file, log_file=log_path)
                 if args.action == "build"
-                else flash_project(uv4, project_dir, project_file)
+                else flash_project(uv4, project_dir, project_file, log_file=log_path)
             )
         else:
             serial = get_serial_config(config, index)
-            save_path = project_log_path(args.save, index, name)
+            save_path = serial_log_path(
+                args.save, args.config_dir, config, index, name
+            )
             result = monitor_serial(
                 port=str(serial["port"]),
                 baud=int(serial["baud"]),
@@ -210,8 +223,8 @@ def main() -> None:
             "status": result.get("status", "unknown"),
             "summary": result.get("summary") or result.get("error") or "",
             "artifact": (
-                project_log_path(args.save, index, name)
-                if args.action == "serial" else None
+                serial_log_path(args.save, args.config_dir, config, index, name)
+                if args.action == "serial" else result.get("log_file", log_path)
             ),
         })
 

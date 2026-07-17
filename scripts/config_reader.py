@@ -15,6 +15,7 @@
 
 {
   "_generated": "2026-07-08 23:44:00",
+    "ai_progress_display": true,
   "keil": { "uv4_path": "C:\\Keil_v5\\UV4\\UV4.exe" },
   "projects": [
     {
@@ -49,6 +50,46 @@ DEFAULT_DATA_BITS = 8
 DEFAULT_STOP_BITS = 1
 DEFAULT_PARITY = "None"
 DEFAULT_DEBUGGER_TYPE = "JLink"
+
+
+def resolve_workspace_dir(
+    config_dir: str | Path | None = None,
+    config: dict[str, Any] | None = None,
+) -> Path:
+    """解析工作区根目录，不使用工程目录或当前目录的启发式向上查找。
+
+    优先采用配置内初始化时记录的 ``workspace``；其次根据 ``config_dir``
+    （工作区目录或配置文件路径）确定。调用方应尽量显式传入 ``config_dir``。
+    """
+    if config and config.get("workspace"):
+        return Path(str(config["workspace"])).resolve()
+    if config_dir is not None:
+        path = Path(config_dir).resolve()
+        if path.is_file() or path.name == CONFIG_FILENAME:
+            return path.parent.parent if path.parent.name == ".copilot" else path.parent
+        return path
+    return Path.cwd().resolve()
+
+
+def safe_project_name(name: str) -> str:
+    """生成可用于 Windows 日志文件名的项目标识。"""
+    safe = "".join(char if char.isalnum() or char in "-_" else "_" for char in name)
+    return safe.strip("_.") or "project"
+
+
+def project_log_path(
+    config_dir: str | Path | None,
+    config: dict[str, Any],
+    project_index: int,
+    project_name: str,
+    log_type: str,
+    suffix: str = ".txt",
+) -> Path:
+    """返回项目独立日志路径：``{工作区}/.copilot/logs/{类型}_pN_{名称}.txt``。"""
+    workspace = resolve_workspace_dir(config_dir, config)
+    filename = f"{safe_project_name(log_type)}_p{project_index}_{safe_project_name(project_name)}{suffix}"
+    return workspace / ".copilot" / "logs" / filename
+DEFAULT_AI_PROGRESS_DISPLAY = True
 
 # ── 路径解析 ──────────────────────────────────────────────────────────
 
@@ -206,6 +247,9 @@ def validate_config(config: dict[str, Any] | None = None) -> list[str]:
         config = load_config()
     errors: list[str] = []
 
+    if "ai_progress_display" in config and not isinstance(config["ai_progress_display"], bool):
+        errors.append("ai_progress_display 必须是 true 或 false")
+
     keil = config.get("keil", {})
     if not keil.get("uv4_path"):
         errors.append("keil.uv4_path 缺失")
@@ -329,6 +373,7 @@ def init_project(workspace_dir: str, project_count: int | None = None) -> dict[s
     config["_generated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     config["workspace"] = str(root)
     config["project_count"] = len(existing_projects)
+    config.setdefault("ai_progress_display", DEFAULT_AI_PROGRESS_DISPLAY)
     config.setdefault("keil", {"uv4_path": DEFAULT_UV4_PATH})
     config["projects"] = existing_projects
 

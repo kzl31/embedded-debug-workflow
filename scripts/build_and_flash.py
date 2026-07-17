@@ -20,7 +20,7 @@ from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPT_DIR))
-from config_reader import load_config, get_project
+from config_reader import get_project, load_config, project_log_path
 from keil_build import find_uv4 as find_uv4_build, build_project
 from keil_flash import find_uv4 as find_uv4_flash, flash_project
 
@@ -62,6 +62,15 @@ def main() -> None:
         project_file = project_file or proj["file"]
         project_dir = project_dir or proj["dir"]
 
+    project = get_project(config, args.project_index) or {}
+    project_name = str(project.get("name") or Path(project_file).stem)
+    build_log = args.build_log or str(project_log_path(
+        args.config_dir, config, args.project_index, project_name, "build_log"
+    ))
+    flash_log = args.flash_log or str(project_log_path(
+        args.config_dir, config, args.project_index, project_name, "flash_log"
+    ))
+
     print("=" * 50)
     if args.skip_build and args.skip_flash:
         operation = "跳过编译和下载"
@@ -85,7 +94,7 @@ def main() -> None:
             project_file=project_file,
             target=args.target,
             rebuild=args.rebuild,
-            log_file=args.build_log,
+            log_file=build_log,
         )
 
         if build_result["status"] == "failure":
@@ -107,7 +116,7 @@ def main() -> None:
             uv4_path=uv4f or uv4,
             project_dir=project_dir,
             project_file=project_file,
-            log_file=args.flash_log,
+            log_file=flash_log,
         )
 
         if flash_result["status"] == "failure":

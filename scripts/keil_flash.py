@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Keil MDK 命令行固件下载工具。
 
-动态读取 data/config.json 获取 UV4 路径和工程参数。
+动态读取工作区配置获取 UV4 路径和工程参数。
 内部调用 UV4.exe -f 命令执行 Flash 下载。
 
 用法：
@@ -18,7 +18,13 @@ from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPT_DIR))
-from config_reader import load_config, get_keil_path, get_project
+from config_reader import (
+    get_keil_path,
+    get_project,
+    load_config,
+    project_log_path,
+    safe_project_name,
+)
 
 
 def find_uv4(config: dict | None = None) -> str | None:
@@ -45,15 +51,6 @@ def find_uv4(config: dict | None = None) -> str | None:
     return None
 
 
-def _logs_dir(proj_dir: Path) -> Path:
-    """定位 <workspace>/.copilot/logs：从工程目录向上查找含 .copilot 的目录。"""
-    p = proj_dir.resolve()
-    for cand in [p, *p.parents]:
-        if (cand / ".copilot").is_dir():
-            return cand / ".copilot" / "logs"
-    return p.parent / ".copilot" / "logs"
-
-
 def flash_project(
     uv4_path: str,
     project_dir: str,
@@ -68,7 +65,11 @@ def flash_project(
             "summary": f"工程目录不存在: {project_dir}",
         }
 
-    log_path = log_file or str(_logs_dir(proj_dir) / "flash_log.txt")
+    # 与编译日志一致：高层调用显式传工作区项目日志；低层直调仅做局部回退。
+    fallback_name = f"flash_log_{safe_project_name(Path(project_file).stem)}.txt"
+    log_path = log_file or str(proj_dir / ".copilot" / "logs" / fallback_name)
+    Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(log_path).write_text("", encoding="utf-8")
     cmd = f'"{uv4_path}" -f "{project_file}" -o "{log_path}"'
 
     print(f"[keil_flash] 🔥 下载固件: {project_file}")
@@ -107,6 +108,7 @@ def flash_project(
         "project_file": project_file,
         "return_code": result.returncode,
         "flash_cmd": cmd,
+        "log_file": str(Path(log_path).resolve()),
     }
 
     # 检查日志中是否有校验信息
@@ -151,11 +153,17 @@ def main() -> None:
         project_file = project_file or proj["file"]
         project_dir = project_dir or proj["dir"]
 
+    project = get_project(config, args.project_index) or {}
+    project_name = str(project.get("name") or Path(project_file).stem)
+    log_file = args.log or str(project_log_path(
+        args.config_dir, config, args.project_index, project_name, "flash_log"
+    ))
+
     result = flash_project(
         uv4_path=uv4,
         project_dir=project_dir,
         project_file=project_file,
-        log_file=args.log,
+        log_file=log_file,
     )
 
     if result["status"] == "failure":
