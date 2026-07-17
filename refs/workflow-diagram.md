@@ -41,26 +41,29 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    S2["seq 2：逐项目询问模式<br/>AI 自动判断跳过参数"] --> Skip{"AI 判断执行意图"}
-    Skip -->|两者都跳过| R19["seq 19：回归检查"]
-    Skip -->|skipBuild| D8["seq 8：直接下载已有固件"]
+    S2["seq 2：确认配置版本"] --> S3["seq 3：逐项目询问模式<br/>AI 自动判断跳过参数"]
+    S3 --> S4["seq 4：快速源码/历史审查<br/>不提问"]
+    S4 --> S5["seq 5：结构化故障追问<br/>最后单独询问补充"]
+    S5 --> Skip{"AI 判断执行意图"}
+    Skip -->|两者都跳过| R21["seq 21：回归检查"]
+    Skip -->|skipBuild| D10["seq 10：直接下载已有固件"]
     Skip -->|skipFlash| Mode{"项目聚合模式（仅编译）"}
     Skip -->|均不跳过| Mode
-    Mode -->|none| D7["seq 7：跳过编译"]
-    Mode -->|compile_only| D7
-    Mode -->|compile_flash| D7
-    Mode -->|full| D6["seq 6：添加 CHESHI 观测"]
-    D6 --> D7
+    Mode -->|none| D9["seq 9：跳过编译"]
+    Mode -->|compile_only| D9
+    Mode -->|compile_flash| D9
+    Mode -->|full| D8["seq 8：添加 CHESHI 观测"]
+    D8 --> D9
 
-    D7 -->|none| R19["seq 19：回归检查"]
-    D7 -->|compile_only 且编译成功| R19
-    D7 -->|compile_flash/full 且编译成功| D8["seq 8：下载固件"]
-    D8 -->|compile_flash 且下载成功| R19
-    D8 -->|full 且下载成功| D9["seq 9：串口监听"]
-    D9 --> D10["seq 10：分析监听结果"]
+    D9 -->|none| R21["seq 21：回归检查"]
+    D9 -->|compile_only 且编译成功| R21
+    D9 -->|compile_flash/full 且编译成功| D10["seq 10：下载固件"]
+    D10 -->|compile_flash 且下载成功| R21
+    D10 -->|full 且下载成功| D11["seq 11：串口监听"]
+    D11 --> D12["seq 12：分析监听结果"]
 
-    R19 --> R20["seq 20：生成报告"]
-    R20 --> R21["seq 21：完成"]
+    R21 --> R22["seq 22：生成报告"]
+    R22 --> R23["seq 23：完成"]
 ```
 
 > 四种模式必须对 `projects` 中每一个项目分别询问，并分别确认全局参数 `skipBuild`、
@@ -72,11 +75,11 @@ flowchart TD
 ```mermaid
 stateDiagram-v2
     [*] --> STARTUP: --init
-    STARTUP --> DEBUG_LOOP: seq 4 衔接到 seq 5
-    DEBUG_LOOP --> VERIFY_AND_REPORT: seq 7/8 按模式跳到 seq 19
-    DEBUG_LOOP --> VERIFY_AND_REPORT: seq 10 找到根因后进入修复验证
-    VERIFY_AND_REPORT --> DEBUG_LOOP: 验证失败回到 seq 5
-    VERIFY_AND_REPORT --> COMPLETED: seq 21 完成
+    STARTUP --> DEBUG_LOOP: seq 6 衔接到 seq 7
+    DEBUG_LOOP --> VERIFY_AND_REPORT: seq 9/10 按模式跳到 seq 21
+    DEBUG_LOOP --> VERIFY_AND_REPORT: seq 12 找到根因后进入修复验证
+    VERIFY_AND_REPORT --> DEBUG_LOOP: 验证失败回到 seq 7
+    VERIFY_AND_REPORT --> COMPLETED: seq 23 完成
 
     COMPLETED --> STARTUP: --reset（新任务）
     COMPLETED --> STARTUP: --init（新对话）

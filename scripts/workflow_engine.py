@@ -389,7 +389,7 @@ class WorkflowEngine:
             return self._completed()
         if self._is_auto(step):
             return self._result("error", "当前步骤为自动步骤，无需 --ack；请使用 --mode 1")
-        if ok and step.get("id") == "step_confirm_config":
+        if ok and step.get("id") == "step_select_project_modes":
             error = self._validate_confirmed_config_state()
             if error:
                 return self._result(
@@ -617,7 +617,7 @@ class WorkflowEngine:
         return ""
 
     def _validate_confirmed_config_state(self) -> str:
-        """seq 2 硬门禁：禁止以旧配置或不完整模式推进。"""
+        """项目模式选择硬门禁：禁止以旧配置或不完整模式推进。"""
         error = self._config_snapshot_error()
         if error:
             return error

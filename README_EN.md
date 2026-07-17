@@ -180,13 +180,14 @@ python scripts/workflow_engine.py --project "<workspace>" --ack failure
 ### Typical debugging flow
 
 ```text
-1. STARTUP auto-ensures the dual-project default config exists, with no prompting throughout
-2. AI reads embedded-debug-config.json, takes the projects array as the sole project list, and asks per-project mode
-3. AI injects the CHESHI debug macro, auto build+flash and captures logs (seq 5~9)
-4. AI analyzes logs and iteratively locates the root cause (seq 10, return to seq 6 if needed)
-5. After locating the root cause, fix the business code first while keeping CHESHI observation points
-6. Rebuild, flash, and continuously read serial logs to confirm the fault is fully resolved; on failure return to the debug loop
-7. After confirmation, clean up CHESHI, then build, run regression verification, and output the report
+1. STARTUP auto-ensures the workspace Keil configuration exists
+2. AI confirms whether to use the current or newly modified config, then asks per-project modes from the final configProjects (seq 2~3)
+3. AI quickly reviews source/history, then asks structured fault questions and a separate final supplement question (seq 4~5)
+4. AI injects the CHESHI debug macro, auto build+flash and captures logs (seq 7~11)
+5. AI analyzes logs and iteratively locates the root cause (seq 12, return to seq 8 if needed)
+6. After locating the root cause, fix the business code first while keeping CHESHI observation points
+7. Rebuild, flash, and continuously read serial logs to confirm the fault is fully resolved; on failure return to the debug loop
+8. After confirmation, clean up CHESHI, then build, run regression verification, and output the report
 ```
 
 ## 📝 Key Conventions
