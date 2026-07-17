@@ -7,7 +7,7 @@
 
 2. **Git 版本管控规则** — 全程禁止 `git push`，所有分支/提交/回退仅在本地操作；临时 CHESHI 代码与正式业务修复代码强制隔离。详见 `refs/git-rules.md`。
 
-3. **CHESHI 统一宏规范** — 全局仅使用 `CHESHI` 单一调试总开关（Bit 位掩码或数值分级）；所有新增调试输出、采集器和 Flush 路径必须受 `CHESHI` 包裹。通信层/ISR 仅采集快照，由 `main` 主循环输出；宏定义集中写在 `main.c` 头部，调试结束整段删除。详见 `refs/cheshi-macro.md`。
+3. **CHESHI 统一宏规范** — 全局仅使用 `CHESHI` 单一调试总开关（Bit 位掩码或数值分级）；凡调试结束需要删除的新增代码均须完整包裹，包括头文件引用、宏、类型/声明、变量、参数、辅助函数、采集器、缓冲区、Flush 及调用路径，不得只包裹打印。通信层/ISR 仅采集快照，由 `main` 主循环输出；宏定义集中写在 `main.c` 头部，调试结束整段删除并恢复临时工程配置。详见 `refs/cheshi-macro.md`。
 
 4. **动态路径加载规则** — 流程引擎的 `--project` 为历史兼容参数名，必须传当前 VS Code **工作区根目录**，不得传 Skill 仓库目录或某个 Keil 工程目录。工作区配置、状态、日志和报告的路径必须由 `scripts/path_config.py` 根据 `scripts/skill-config.json` 生成，禁止在 Python、YAML 或 Markdown 中重复拼接；实际源码目录和工程文件从配置的 `projects[*]` 解析。日志文件必须包含项目下标和名称，禁止多项目覆盖。Keil 默认路径由集中配置自动填入，不询问用户。详见 `refs/config-format.md` 和 `refs/runtime-config.md`。
 

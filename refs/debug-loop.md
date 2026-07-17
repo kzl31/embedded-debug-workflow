@@ -180,7 +180,7 @@ python scripts/serial_monitor.py --duration 10
 
 ### 验证通过后
 
-1. 删除 `main.c` 头部的全部 CHESHI 宏定义和调试打印、采集器及验证检测
+1. 按本轮新增项清单删除全部 CHESHI 临时代码，包括头文件引用、子宏、类型/声明、变量、参数、辅助函数、采集器、缓冲区、Flush、调用点及验证检测，并恢复临时工程配置
 2. 最终编译确认无误
 3. 执行 Git 合并（参见 `refs/git-rules.md`）
 4. 输出故障解决报告（参见 `templates/report.md`）

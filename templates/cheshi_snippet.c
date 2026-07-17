@@ -13,10 +13,23 @@
  * 使用说明：
  * 1. 将本段代码粘贴到 main.c 文件头部
  * 2. 根据需要调整 CHESHI 值控制打印模块
- * 3. 调试完成后删除本整段代码
+ * 3. 凡调试结束需删除的 include、宏、类型、声明、变量、参数、
+ *    辅助函数、缓冲区、初始化及调用点，都必须放入对应 CHESHI 块
+ * 4. 调试完成后删除全部临时代码，并恢复临时工程配置
  *****************************************/
 
 /* ========== 使用示例 ========== */
+
+/* 临时依赖、声明、数据和辅助函数必须完整受控，不能只包裹 printf */
+#if (CHESHI & 0x02)
+#include "debug_capture.h"
+
+#define DBG_BUF_SIZE 256U
+
+static uint8_t g_debug_buffer[DBG_BUF_SIZE];
+static void Debug_CaptureFrame(const uint8_t *data, uint16_t length);
+static void Debug_Flush(void);
+#endif
 
 /* 通用流程打印 Bit0 */
 #if (CHESHI & 0x01)

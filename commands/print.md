@@ -36,7 +36,8 @@ required_reference: "{skill_dir}/refs/cheshi-macro.md"
 ```yaml
 action: design
 强制规则:
-  - 所有新增调试代码都由 CHESHI 条件编译包裹
+  - 凡调试结束需要删除的新增代码都由 CHESHI 条件编译完整包裹，不得只包裹 printf
+  - 包括临时头文件引用、子宏、类型/声明、变量、函数参数、辅助函数、初始化、采集器、缓冲区、Flush、调用点和错误路径
   - CHESHI 统一集中定义在 main.c 文件头部；已有定义时复用并按需调整位掩码
   - 标签使用 [COMMON]、[COMM_RAW]、[DRV_xxx]、[FSM]、[ERR]、[INFO] 或 [HEX_DATA]
   - ISR、DMA 回调、协议接收回调和通信底层不得直接 printf/puts
@@ -60,12 +61,14 @@ action: edit_source
 ```yaml
 action: verify
 checklist:
-  - 新增打印是否全部受 CHESHI 控制
+  - 所有调试结束需删除的新增代码是否全部受 CHESHI 控制
+  - 临时 include、宏、类型、声明、变量、参数、辅助函数及调用点是否存在裸露
   - CHESHI 是否集中且无重复定义
   - 通信/中断路径是否无直接阻塞打印
   - 格式化占位符是否与变量类型匹配
   - Debug_Flush 是否位于主循环或非时序敏感调用链
-  - 关闭 CHESHI 后是否不引入未使用符号或缺失引用
+  - 关闭 CHESHI 后是否不引入临时依赖、未使用符号、缺失引用或行为变化
+  - 是否记录临时 Keil Define、Include Path、源文件等工程配置以供最终清理
 ```
 
 ---
