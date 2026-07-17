@@ -325,6 +325,7 @@ class WorkflowEngine:
         self.waiting: bool = bool(pause_state.get("waiting", False))
         self.wait_msg: str = str(pause_state.get("reason", "") or "")
         self.progress_display_enabled = load_progress_display_enabled(self.project_dir)
+        self.displayed_seqs: set[int] = set()
 
         self.engine_bin = f'python "{Path(__file__).resolve()}"'
 
@@ -357,7 +358,6 @@ class WorkflowEngine:
         self.currentSeq = seq
         self.fg["currentSeq"] = seq
         self.fg["currentPhase"] = self.currentPhase
-        self.fg.setdefault("progressDisplay", {})["acknowledgedSeq"] = None
         save_flow_gate(self.project_dir, self.fg)
 
     def _add_completed(self, phase: str) -> None:
@@ -373,23 +373,10 @@ class WorkflowEngine:
         step = self._current_step()
         if step is None:
             return self._completed()
-        if self._progress_required(step):
-            return self._progress_instruction(step)
         if self._is_auto(step):
             self._execute_auto(step)
             return self._drive()
         return self._ai_instruction(step)
-
-    def ack_progress(self) -> dict:
-        """确认 AI 已将当前步骤进度作为独立用户消息输出，然后解锁该步骤。"""
-        step = self._current_step()
-        if step is None:
-            return self._completed()
-        if not self.progress_display_enabled:
-            return self._result("error", "ai_progress_display=false，无需确认流程进度")
-        self.fg.setdefault("progressDisplay", {})["acknowledgedSeq"] = step.get("seq")
-        save_flow_gate(self.project_dir, self.fg)
-        return self.run()
 
     def ack(self, ok: bool) -> dict:
         """AI 步骤提交结果（--ack success|failure / --done）。"""
@@ -696,8 +683,6 @@ class WorkflowEngine:
 
             self._set_current_seq(self.next_seq)
             step = self.steps[self.currentSeq - 1]
-            if self._progress_required(step):
-                return self._progress_instruction(step)
             if self._is_auto(step):
                 self._execute_auto(step)
                 continue
@@ -706,6 +691,7 @@ class WorkflowEngine:
     # ── 自动步骤执行 ────────────────────────────────────────────
 
     def _execute_auto(self, step: dict) -> None:
+        self._emit_progress(step)
         action = step.get("action")
 
         # 1) 前置断言
@@ -925,51 +911,30 @@ class WorkflowEngine:
         result["next_action"] = (
             f'{self.engine_bin} --project "{self.project_dir}" --ack success'
             f'   （若未达成目标用 --ack failure）')
+        if self.progress_display_enabled:
+            result["user_display"] = self._user_display(step)
         return result
 
-    def _progress_required(self, step: dict) -> bool:
-        """进度开启时，未确认展示的步骤禁止执行。"""
-        acknowledged = self.fg.get("progressDisplay", {}).get("acknowledgedSeq")
-        return self.progress_display_enabled and acknowledged != step.get("seq")
-
-    def _progress_instruction(self, step: dict) -> dict:
-        """返回独立进度门禁；user_display 只是待发送内容，不等于已经展示。"""
-        return self._result(
-            "awaiting_progress",
-            "必须先向用户独立展示 user_display.text，展示后才能确认并执行步骤",
-            seq=step.get("seq"), id=step.get("id"), phase=step.get("phase"),
-            user_display=self._user_display(step),
-            next_action=(
-                f'{self.engine_bin} --project "{self.project_dir}" --ack-progress'
-            ),
-            enforcement=(
-                "禁止在收到本结果的同一条助手消息中调用 next_action；必须先发送且只发送 "
-                "user_display.text，下一条助手消息再调用 next_action。"
-            ),
-        )
+    def _emit_progress(self, step: dict) -> None:
+        """为每个步骤生成一次可展示进度；关闭开关时不要求 AI 输出。"""
+        seq = step.get("seq")
+        if not isinstance(seq, int) or seq in self.displayed_seqs:
+            return
+        self.displayed_seqs.add(seq)
+        if self.progress_display_enabled:
+            print(json.dumps({"user_display": self._user_display(step)},
+                             ensure_ascii=False), file=sys.stdout)
 
     def _user_display(self, step: dict) -> dict:
-        """生成简短进度展示；仅告知正在做什么，不构成分析或结果汇报。"""
+        """生成最小进度载荷，减少工具输出和上下文消耗。"""
         current_step = f'步骤 {step.get("seq")}/{len(self.steps)}：{step.get("what", "")}'
-        display = {
-            "type": "progress_only",
-            "current_step": current_step,
-            "text": f'> {current_step}',
-            "instruction": "仅展示 text 字段；不得展开分析、日志、根因、结论或报告内容。",
-        }
+        text = f'> {current_step}'
         iteration = int(self._get_path("debugLoopInfo.iterationCount") or 0)
         if step.get("phase") == "DEBUG_LOOP":
             loop_count = iteration + 1
             reason = self._get_path("debugLoopInfo.loopReason") or "首次进入调试循环，开始定位和采集证据"
-            display["loop"] = {
-                "count": loop_count,
-                "reason": reason,
-                "text": f"调试循环第 {loop_count} 轮：{reason}",
-            }
-            display["text"] = (
-                f'> 调试循环第 {loop_count} 轮：{reason}；{current_step}'
-            )
-        return display
+            text = f'> 调试循环第 {loop_count} 轮：{reason}；{current_step}'
+        return {"text": text}
 
     # ── 终止状态 ────────────────────────────────────────────────
 
@@ -1129,7 +1094,6 @@ def main():
     parser.add_argument("--mode", type=int, choices=[0, 1], default=None,
                         help="0=只读状态 1=执行/推进当前步骤")
     parser.add_argument("--ack", choices=["success", "failure"], help="AI 步骤结果提交")
-    parser.add_argument("--ack-progress", action="store_true", help="确认已独立展示当前步骤进度")
     parser.add_argument("--done", action="store_true", help="= --ack success")
     parser.add_argument("--wake", action="store_true", help="从 wait_user 暂停恢复")
     parser.add_argument("--reload-config", action="store_true",
@@ -1157,8 +1121,6 @@ def main():
             result = engine.reload_config()
         elif args.wake:
             result = engine.wake()
-        elif args.ack_progress:
-            result = engine.ack_progress()
         elif args.ack:
             result = engine.ack(args.ack == "success")
         elif args.done:
