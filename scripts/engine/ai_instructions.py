@@ -15,12 +15,29 @@ class AIInstructionMixin:
     # ── AI 步骤指令 ─────────────────────────────────────────────
 
     def _ai_instruction(self, step: dict) -> dict:
+        params = self._resolve_templates(step.get("params", {}))
+        action = step.get("action", "")
         result = self._result("awaiting_ai", step.get("what", ""),
                               seq=step.get("seq"), id=step.get("id"),
                               phase=step.get("phase"), action=step.get("action"),
                               what=step.get("what"),
-                              params=self._resolve_templates(step.get("params", {})),
+                              params=params,
                               forbidden=self._phase_forbidden(step.get("phase")))
+        # Keep the full execution contract visible to the agent. The short
+        # message alone is not sufficient for multi-part AI workflow steps.
+        result["ai_step"] = {
+            "required": True,
+            "action": action,
+            "objective": step.get("what", ""),
+            "phase": step.get("phase"),
+            "instructions": params,
+            "completion": "完成本步骤规定的全部动作后才能提交 ack",
+            "failure": "无法完成或证据不足时提交 ack failure，不得伪造成功",
+        }
+        result["progress"] = {
+            "current": self._user_display(step),
+            "next": "完成 AI 动作后提交 ack success/failure，再继续流程",
+        }
         result["next_action"] = (
             f'{self.engine_bin} --project "{self.project_dir}" --ack success'
             f'   （若未达成目标用 --ack failure）')

@@ -230,7 +230,7 @@ steps:
             debugLoopInfo.iterationExecutionAllowed=false
         禁止在未核对真实差异时设置 modified，禁止用注释、空白、重复观测或状态字段更新冒充源码修改。
       note: |
-        修改前先 git commit 以便回退。
+        本轮任何源码或工程配置修改前，必须先 git commit 当前状态建立本轮回退基线；提交完成后再修改。
         插入 CHESHI 非每轮强制，仅当能缩小范围、验证假设或确认根因时才补充；CHESHI 须下载到板才可见。
         编译失败/语法错误/配置错误/目标板不可用时优先修复问题而非加日志（含从 seq 7 回本步的情况）。
         （edit_source 属 AI 步骤，引擎不执行本步 precheck）
