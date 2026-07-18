@@ -47,7 +47,6 @@ class AutoStepMixin:
     # ── 自动步骤执行 ────────────────────────────────────────────
 
     def _execute_auto(self, step: dict) -> None:
-        self._emit_progress(step)
         action = step.get("action")
 
         # 1) 前置断言
