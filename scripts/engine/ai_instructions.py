@@ -34,10 +34,11 @@ class AIInstructionMixin:
             "completion": "完成本步骤规定的全部动作后才能提交 ack",
             "failure": "无法完成或证据不足时提交 ack failure，不得伪造成功",
         }
-        result["progress"] = {
-            "current": self._user_display(step),
-            "next": "完成 AI 动作后提交 ack success/failure，再继续流程",
-        }
+        if self.progress_display_enabled:
+            result["progress"] = {
+                "current": self._user_display(step),
+                "next": "完成 AI 动作后提交 ack success/failure，再继续流程",
+            }
         result["next_action"] = (
             f'{self.engine_bin} --project "{self.project_dir}" --ack success'
             f'   （若未达成目标用 --ack failure）')
