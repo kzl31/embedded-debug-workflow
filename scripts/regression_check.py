@@ -119,7 +119,16 @@ def check_cheshi_clean(config, config_dir) -> list[dict]:
                     except OSError:
                         continue
                     except UnicodeDecodeError:
-                        residual_files.append(f"{f} (非 UTF-8，无法确认清理状态)")
+                        try:
+                            raw = f.read_bytes()
+                        except OSError:
+                            continue
+                        residual_tokens = (
+                            b"CHESHI", b"Debug_Flush", b"Debug_Capture",
+                            b"g_dbg_buf", b"DBG_BUF_SIZE", b"g_dbg_wr", b"g_dbg_rd",
+                        )
+                        if any(token in raw for token in residual_tokens):
+                            residual_files.append(f"{f} (非 UTF-8 且含调试残留)")
                         continue
                     if CHESHI_SYMBOL_RE.search(t):
                         residual_files.append(str(f))

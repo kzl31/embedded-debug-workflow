@@ -170,7 +170,16 @@ def main() -> int:
             except OSError:
                 continue
             except UnicodeDecodeError:
-                residual.append(f"{src} (非 UTF-8，未修改)")
+                try:
+                    raw = src.read_bytes()
+                except OSError:
+                    continue
+                residual_tokens = (
+                    b"CHESHI", b"Debug_Flush", b"Debug_Capture",
+                    b"g_dbg_buf", b"DBG_BUF_SIZE", b"g_dbg_wr", b"g_dbg_rd",
+                )
+                if any(token in raw for token in residual_tokens):
+                    residual.append(f"{src} (非 UTF-8 且含调试残留，未修改)")
                 continue
             new_text, b, d, review = strip_cheshi(text)
             if review:
