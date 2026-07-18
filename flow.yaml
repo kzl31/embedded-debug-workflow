@@ -230,7 +230,7 @@ steps:
             debugLoopInfo.iterationExecutionAllowed=false
         禁止在未核对真实差异时设置 modified，禁止用注释、空白、重复观测或状态字段更新冒充源码修改。
       note: |
-        本轮任何源码或工程配置修改前，必须先 git commit 当前状态建立本轮回退基线；提交完成后再修改。
+        本轮任何源码或工程配置修改前，必须先 git commit 当前状态建立本轮回退基线；提交完成后再修改，具体事项参考git-rules.md。
         插入 CHESHI 非每轮强制，仅当能缩小范围、验证假设或确认根因时才补充；CHESHI 须下载到板才可见。
         编译失败/语法错误/配置错误/目标板不可用时优先修复问题而非加日志（含从 seq 7 回本步的情况）。
         （edit_source 属 AI 步骤，引擎不执行本步 precheck）
@@ -240,7 +240,10 @@ steps:
         新增代码须由 CHESHI 条件编译完整包裹（头文件/子宏/常量/类型/变量/函数参数/辅助函数/初始化/
         缓冲区/采集与 Flush/错误路径/计数器/临时分支），禁止裸 printf/puts/日志宏/未受控副作用；
         关闭 CHESHI 后正式代码须可独立编译且行为不变。
-        无修改须如实设 reused/unchanged，引擎将跳过编译/下载/监听；差异一致后才 --ack success。
+        每轮开始前，AI 必须根据当前证据判断是否需要本轮串口监听：需要时设置
+        projectInfo.serialCaptureRequested=true，不需要时设置为 false。该判断只影响本轮
+        编译/下载后的串口采集，不得把 “full” 模式理解为强制监听。无修改须如实设 reused/unchanged，
+        引擎将跳过编译/下载/监听；差异一致后才 --ack success。
     precheck: []
     pre_action: []
     on_success:
@@ -319,7 +322,7 @@ steps:
         then:
           - goto: 8
         else:
-          - goto: 19
+          - goto: 10
     on_failure:
       - update_state:
           debugLoopInfo.lastBuildStatus: "failure"
@@ -373,7 +376,7 @@ steps:
         then:
           - goto: 9
         else:
-          - goto: 19
+          - goto: 10
     on_failure:
       - update_state:
           debugLoopInfo.lastFlashStatus: "failure"

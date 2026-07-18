@@ -28,7 +28,8 @@ class ConfigSyncMixin:
                 self._sync_project_modes(str(value))
             elif key in {
                 "projectInfo.skipBuild", "projectInfo.skipFlash",
-                "projectInfo.observeExistingSerial", "projectInfo.finishRequested",
+                "projectInfo.observeExistingSerial", "projectInfo.serialCaptureRequested",
+                "projectInfo.finishRequested",
             }:
                 if not isinstance(value, bool):
                     raise ValueError(f"{key} 必须是 true 或 false")
@@ -204,6 +205,8 @@ class ConfigSyncMixin:
         skip_flash = bool(project_info.get("skipFlash", False))
         observe_existing_serial = bool(
             project_info.get("observeExistingSerial", False))
+        serial_capture_requested = bool(
+            project_info.get("serialCaptureRequested", True))
         finish_requested = bool(project_info.get("finishRequested", False))
         project_info["hasBuildProjects"] = (
             not skip_build and any(mode != "none" for mode in modes)
@@ -213,7 +216,8 @@ class ConfigSyncMixin:
             and any(mode in {"compile_flash", "full"} for mode in modes)
         )
         project_info["hasSerialProjects"] = (
-            not finish_requested
+            serial_capture_requested
+            and not finish_requested
             and (observe_existing_serial or (not skip_build and not skip_flash))
             and any(mode == "full" for mode in modes)
         )

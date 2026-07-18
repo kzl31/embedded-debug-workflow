@@ -119,6 +119,7 @@ def _default_flow_gate() -> dict:
             "skipBuild": False,
             "skipFlash": False,
             "observeExistingSerial": False,
+            "serialCaptureRequested": True,
             "finishRequested": False,
             "hasBuildProjects": False,
             "hasFlashProjects": False,
