@@ -111,7 +111,7 @@ npx skills remove embedded-debug-workflow --global --yes
 ```
 embedded-debug-workflow/
 ├── README.md              # 本文件
-├── SKILL.md               # AI 核心入口（铁律 + 引擎调用方式 + flow.yaml 格式速查）
+├── SKILL.md               # AI 核心入口（触发条件、执行边界和文档路由）
 ├── flow.yaml              # 🔑 流程唯一真相源（线性序号步骤表，含 phase 分组）
 ├── commands/              # /kzl 快捷命令入口
 │   ├── help.md            #   /kzl 帮助（帮助）
@@ -194,22 +194,10 @@ embedded-debug-workflow/
 
 ### 启动初始化流程
 
-Skill 激活后，AI 按以下模式驱动引擎（**唯一流程入口**）：
-
-```
-① 新对话 → 运行引擎 --init 初始化状态，不询问用户
-② 若配置不存在，扫描当前 VS Code 工作区的 Keil 工程，在集中配置解析出的工作区数据目录中生成配置，其他参数使用默认值
-③ 读取配置中的实际 projects 数组，对每个项目无默认值地询问独立模式
-  （不编译不下载/仅编译/编译下载/编译下载监听）
-④ 运行引擎 --mode 0 读取当前状态（当前 seq / phase / 待办）
-⑤ 运行引擎 --mode 1 执行/推进当前步骤：
-   - 自动步骤（run_script/check_file/...）：引擎直接执行并按 flow.yaml 的
-     on_success / on_failure 自动跳转，直到遇到 AI 步骤或完成
-   - AI 步骤（ask_user/edit_source/analyze/report/...）：引擎输出指令（status=awaiting_ai），
-     AI 执行后提交 --ack success（或 --ack failure）
-   - 人工暂停（wait_user）：status=awaiting_user，处理完 --wake 恢复
-⑥ 重复 ④~⑤，直至 status=completed
-```
+Skill 激活后，先初始化当前 VS Code 工作区，再由流程引擎按 `flow.yaml` 推进。AI 只执行引擎明确交给
+AI 的故障采集、源码调整、证据分析、回归核对和报告整理；编译、下载、状态更新和流程跳转由引擎完成。
+完整的 AI 行为规则见 `SKILL.md` 和 `refs/core-rules.md`，具体命令见 `commands/init.md` 与
+`refs/script-commands.md`。
 
 > `/kzl 初始化` 每次都会递归扫描当前工作区的 Keil 工程并显示结果。已有配置会保留人工参数并增量追加新工程；Keil、串口和下载器使用通用默认值。也可使用 `config_reader.py --scan <工作区>` 只查看扫描结果而不修改配置。路径由 `skill-config.json` 集中解析。
 > 所有流程逻辑（步骤顺序、跳转、条件）都写在 `flow.yaml`，引擎只是按 `seq` 查表执行。
@@ -226,16 +214,9 @@ Skill 激活后，AI 按以下模式驱动引擎（**唯一流程入口**）：
 
 ### 典型调试流程
 
-```
-1. STARTUP 自动确保配置存在；缺失时扫描当前工作区的 Keil 工程并按实际路径生成
-2. Python 初始化脚本使用数字确认配置版本，并逐项目选择执行模式；引擎自动同步结果
-3. AI 快速审查源码/历史后，以结构化选项追问故障信息并单独询问补充内容（seq 2~3）
-4. AI 视情况注入 CHESHI 调试宏；只有在能产出新证据时才加观测点，否则优先修复编译/连接/配置问题（seq 6~11）
-5. AI 分析日志并迭代定位根因（seq 10，必要时回到 seq 6）
-6. 定位根因后先修复业务代码，保留 CHESHI 观测点
-7. 重新编译下载并持续读取串口日志，确认故障彻底解决；失败则退回调试循环
-8. 确认成功后清理 CHESHI，再编译、回归验证并输出报告
-```
+`STARTUP` 负责配置和故障信息采集，`DEBUG_LOOP` 负责观测、验证和根因收敛，
+`VERIFY_AND_REPORT` 负责清理临时代码、回归验证和报告输出。具体步骤和分支以 `flow.yaml` 为准，
+不要在 README 中维护步骤编号。
 
 ## 📝 规范要点
 

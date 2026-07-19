@@ -96,7 +96,7 @@
       变更文件 / 验证结果与边界 / 回归风险 / 后续建议，并明确所有未验证事项
 - [ ] **索引写入**：追加到 `data/debug-history.yaml`（date/desc/fault/root_cause/status/verification/report/source）
 - [ ] **持久记忆**：摘要和报告路径写入 `/memories/embedded-debug-workflow.md`，且无重复条目
-- [ ] **状态收尾**：`flow-gate.json` 的 `currentPhase` 已标记 `COMPLETED`
+- [ ] **状态收尾**：引擎已返回 `status = "completed"`；不得通过直接读取或修改内部状态文件判断完成
 
 ---
 

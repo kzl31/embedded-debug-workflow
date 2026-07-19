@@ -91,7 +91,7 @@ Reload the target agent or restart the editor after installation.
 embedded-debug-workflow/
 ├── README.md              # Chinese documentation
 ├── README_EN.md           # English documentation (this file)
-├── SKILL.md               # AI core entry (hard rules + engine invocation + flow.yaml quick reference)
+├── SKILL.md               # AI core entry (trigger, execution boundary, and document routing)
 ├── flow.yaml              # 🔑 Single source of truth for the workflow (linear numbered steps, with phase grouping)
 ├── commands/              # /kzl command entry points
 │   ├── help.md            #   /kzl help
@@ -171,20 +171,15 @@ Do not duplicate path construction in Python, YAML, or Markdown.
 
 ### Startup / initialization flow
 
-Once the skill is activated, the AI drives the engine in the following pattern (**the only workflow entry point**):
+Once the skill is activated, initialize the current VS Code workspace and let the engine drive the workflow.
+The AI handles only actions explicitly assigned by the engine, such as fault intake, source edits, evidence analysis,
+regression review, and report preparation. Build, flash, state updates, and flow transitions are engine-controlled.
 
 ```text
-① New conversation → run engine --init to initialize state, without asking the user
-② If config is missing, scan the current VS Code workspace and generate the configuration in the workspace data directory resolved from `skill-config.json`
-③ Read the actual projects array from config; ask per-project execution mode (build+flash / compile-only / none)
-④ Run engine --mode 0 to read current state (current seq / phase / todo)
-⑤ Run engine --mode 1 to execute/advance the current step:
-   - Auto steps (run_script/check_file/...): engine executes directly and jumps per on_success/on_failure
-     until it hits an AI step or completion
-   - AI steps (ask_user/edit_source/analyze/report/...): engine outputs an instruction (status=awaiting_ai);
-     after the AI acts, submit --ack success (or --ack failure)
-   - Manual pause (wait_user): status=awaiting_user; after handling, --wake to resume
-⑥ Repeat ④~⑤ until status=completed
+① New conversation → run engine --init for the current workspace
+② Continue according to the engine's returned `next_action`
+③ Execute AI instructions completely and submit the required acknowledgement
+④ Continue until the engine returns `status=completed`
 ```
 
 Common commands:
@@ -193,10 +188,10 @@ Common commands:
 # ① initialize state (no prompt)
 python scripts/workflow_engine.py --init --project "<workspace>"
 
-# ④ read current state (seq / phase / todo)
+# optional read-only engine snapshot
 python scripts/workflow_engine.py --project "<workspace>" --mode 0
 
-# ⑤ execute / advance current step
+# execute / advance current step
 python scripts/workflow_engine.py --project "<workspace>" --mode 1
 
 # after an AI step, submit the result
@@ -210,14 +205,10 @@ python scripts/workflow_engine.py --project "<workspace>" --ack failure
 ### Typical debugging flow
 
 ```text
-1. STARTUP auto-ensures the workspace Keil configuration exists
-2. AI confirms whether to use the current or newly modified config, then asks per-project modes from the final configProjects (seq 1)
-3. AI quickly reviews source/history, then asks structured fault questions and a separate final supplement question (seq 2~3)
-4. AI injects the CHESHI debug macro only when it is worthwhile and can produce new evidence; otherwise it fixes build/connection/config issues first (seq 6~11)
-5. AI analyzes logs and iteratively locates the root cause (seq 10, return to seq 6 if needed)
-6. After locating the root cause, fix the business code first while keeping CHESHI observation points
-7. Rebuild, flash, and continuously read serial logs to confirm the fault is fully resolved; on failure return to the debug loop
-8. After confirmation, clean up CHESHI, then build, run regression verification, and output the report
+1. STARTUP handles workspace configuration and fault intake.
+2. DEBUG_LOOP handles observation, verification, and root-cause convergence.
+3. VERIFY_AND_REPORT handles temporary-code cleanup, regression verification, and reporting.
+The exact steps and branches are defined by `flow.yaml`; this README intentionally does not duplicate step details.
 ```
 
 ## 📝 Key Conventions

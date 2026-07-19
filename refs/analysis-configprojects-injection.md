@@ -1,4 +1,7 @@
-# 待定问题：seq3 的 `configProjects` 未注入 AI 指令
+# 历史问题记录：seq3 的 `configProjects` 未注入 AI 指令
+
+> 本文件是未验证的维护者问题记录，不是当前 Skill 规则，也不应作为 AI 执行依据。现行行为以
+> `flow.yaml`、引擎返回的 `ai_step.instructions` 和 `refs/core-rules.md` 为准。
 
 > 状态：**待评审，尚未修改代码**（用户要求先出文档审阅，确认后再实施）
 

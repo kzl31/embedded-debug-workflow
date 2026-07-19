@@ -37,21 +37,15 @@
 }
 ```
 
-`ai_progress_display` 控制 AI 是否向用户展示流程进度：
-
-- `true`（默认）：AI 仅在调用引擎之前，根据上一次步骤、简要结果和本次调用目的生成独立
-  进度消息，格式严格为 `> 内容`；引擎调用后不输出步骤，且不增加第二次引擎调用。
-- `false`：AI 不输出调用前流程进度；正常 AI 步骤、提问、人工暂停和最终结果不受影响。
-- 该字段必须是 JSON 布尔值 `true` / `false`，不能写成字符串。
+`ai_progress_display` 是运行配置字段。它的用户可见行为和进度消息格式统一由
+`refs/core-rules.md` 规定；本文件只说明该字段必须是 JSON 布尔值 `true` / `false`，不能写成字符串。
 
 > 下载器以串口号（`com`）标识，而非序列号。
 > `/kzl 初始化` 默认使用当前 VS Code 工作区根目录，并递归扫描 `.uvprojx` / `.uvproj`；
 > 按实际发现的工程生成 `name`、`dir`、`file`，不询问文件路径。
 > 用户可自行增加、删除或重排 `projects` 元素；后续始终以数组实际内容为准，`project_count`
-> 仅记录扫描数量，不参与运行时判断。下一阶段必须对每个项目分别询问执行模式，不设置
-> 默认值或推荐值。四个选项为：`none`（不编译不下载）、`compile_only`（仅编译）、
-> `compile_flash`（编译下载但不监听）、`full`（编译下载监听）。允许例如项目 0 选择
-> `full`、项目 1 选择 `none`、项目 2 选择 `compile_flash`。
+> 仅记录扫描数量，不参与运行时判断。初始化交互和项目模式选择由 `commands/init.md` 说明，
+> AI 不得在完整流程中重复询问。
 > `skipBuild`、`skipFlash`、`observeExistingSerial`、`finishRequested` 是由 AI 根据用户意图和
 > 当前证据自动设置的本次运行参数，禁止逐项询问用户，也不写入工程配置。开始时需要先观察
 > 板上已有固件串口，则跳过编译下载并启用 `observeExistingSerial`；用户要求结束流程时启用
